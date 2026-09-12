@@ -12,4 +12,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - CI: format, clippy, build, test, commit lint, and secret scanning workflows.
 - Pinned Rust toolchain and workspace dependency pins for the Soroban contract stack.
 
+### Fixed
+
+- CI installs the pinned toolchain via the action's version input instead of a nonexistent tag.
+- Secret scanning runs the pinned gitleaks binary directly, which works on organization repositories without a license key.
+
 [Unreleased]: https://github.com/Mvua-Protocol/mvua-contract/compare/...HEAD
