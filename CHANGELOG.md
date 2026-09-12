@@ -12,4 +12,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - CI: format, clippy, build, test, commit lint, and secret scanning workflows.
 - Pinned Rust toolchain and workspace dependency pins for the Soroban contract stack.
 
-[Unreleased]: https://github.com/mvua-protocol/mvua-contracts/compare/...HEAD
+[Unreleased]: https://github.com/Mvua-Protocol/mvua-contract/compare/...HEAD

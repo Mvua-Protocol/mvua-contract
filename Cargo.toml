@@ -15,7 +15,7 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/mvua-protocol/mvua-contracts"
+repository = "https://github.com/Mvua-Protocol/mvua-contract"
 authors = ["the Mvua Protocol contributors"]
 
 [workspace.dependencies]

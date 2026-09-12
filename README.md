@@ -1,6 +1,6 @@
 # Mvua Protocol Contracts
 
-[![CI](https://github.com/mvua-protocol/mvua-contracts/actions/workflows/ci.yml/badge.svg)](./.github/workflows/ci.yml)
+[![CI](https://github.com/Mvua-Protocol/mvua-contract/actions/workflows/ci.yml/badge.svg)](./.github/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
 **Parametric climate insurance for the people who feed us, built on [Stellar](https://stellar.org) with [Soroban](https://soroban.stellar.org).**
@@ -63,8 +63,8 @@ Prerequisites:
 - [Stellar CLI](https://developers.stellar.org/docs/tools/developer-tools/stellar-cli)
 
 ```bash
-git clone https://github.com/mvua-protocol/mvua-contracts
-cd mvua-contracts
+git clone https://github.com/Mvua-Protocol/mvua-contract
+cd mvua-contract
 
 cargo fmt --all --check     # formatting
 cargo clippy --workspace --all-targets -- -D warnings
