@@ -1,0 +1,17 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Contract build artifacts
+*.wasm
+!tests/**/*.wasm
+
+# Local environments and secrets
+.env
+.env.*
+!.env.example
+
+# Editors
+.idea/
+.vscode/
+*.swp

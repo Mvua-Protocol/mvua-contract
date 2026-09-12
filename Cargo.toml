@@ -1,0 +1,31 @@
+# Mvua Protocol contracts workspace.
+#
+# Virtual manifest: contract crates are added to `members` as they are
+# implemented (Phase 1 of the roadmap). Dependency pins below are exact
+# (see CONTRIBUTING.md: no version bumps without documentation).
+#
+# Pin note: soroban-sdk must match the protocol generation supported by
+# Stellar testnet. Verified against current releases before first use;
+# any bump is documented in the changelog.
+
+[workspace]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/mvua-protocol/mvua-contracts"
+authors = ["the Mvua Protocol contributors"]
+
+[workspace.dependencies]
+soroban-sdk = "=23.0.0"
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = false
+strip = "symbols"
+panic = "abort"
+codegen-units = 1
+lto = true
