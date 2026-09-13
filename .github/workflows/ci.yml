@@ -35,17 +35,41 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
           restore-keys: ${{ runner.os }}-cargo-
 
+      - name: Count contract crates
+        id: crates
+        run: echo "count=$(find contracts -mindepth 2 -maxdepth 2 -name Cargo.toml 2>/dev/null | wc -l)" >> "$GITHUB_OUTPUT"
+
       - name: Format check
-        run: cargo fmt --all --check
+        run: |
+          if [ "${{ steps.crates.outputs.count }}" -eq 0 ]; then
+            echo "No contract crates yet (Phase 0); format gate activates with the first crate in Phase 1."
+          else
+            cargo fmt --all --check
+          fi
 
       - name: Clippy (warnings denied)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: |
+          if [ "${{ steps.crates.outputs.count }}" -eq 0 ]; then
+            echo "No contract crates yet (Phase 0); clippy gate activates with the first crate in Phase 1."
+          else
+            cargo clippy --workspace --all-targets -- -D warnings
+          fi
 
       - name: Build
-        run: cargo build --workspace
+        run: |
+          if [ "${{ steps.crates.outputs.count }}" -eq 0 ]; then
+            echo "No contract crates yet (Phase 0); build gate activates with the first crate in Phase 1."
+          else
+            cargo build --workspace
+          fi
 
       - name: Test
-        run: cargo test --workspace
+        run: |
+          if [ "${{ steps.crates.outputs.count }}" -eq 0 ]; then
+            echo "No contract crates yet (Phase 0); test gate activates with the first crate in Phase 1."
+          else
+            cargo test --workspace
+          fi
 
   audit:
     name: Dependency audit
