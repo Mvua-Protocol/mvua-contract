@@ -53,7 +53,14 @@ Traditional insurance needs loss assessors, forms, and disputes, which makes sma
 | `payout-vault` | Batch payouts and pause | planned |
 | `test-utils` | Shared test fixtures and scenarios | planned |
 
-Implementation starts in Phase 1 of the roadmap; this repository currently ships governance, CI, and the pinned toolchain.
+Implementation starts in Phase 1 of the roadmap; this repository currently ships governance, CI, the pinned toolchain, and the design documents below.
+
+## Design documents
+
+- [Architecture](docs/ARCHITECTURE.md): module map, storage layout, error model, authorization, and the upgrade pattern.
+- [Threat model](docs/THREAT-MODEL.md): assets, trust boundaries, adversaries, and mitigations.
+- [Index definitions](docs/INDEX-SPEC.md): the trigger formulas, severity curve, and golden test vectors.
+- [Upgrade and governance](docs/UPGRADE-GOVERNANCE.md): guardian multisig, timelock, and migration procedures.
 
 ## Getting started
 
