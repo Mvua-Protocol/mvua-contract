@@ -82,7 +82,7 @@ sequenceDiagram
   participant Buyer as Buyer (app or cooperative)
   participant POL as policy
   participant RP as risk-pool
-  Buyer->>POL: mint(region, coverage, index_ref, window, max_premium, metadata)
+  Buyer->>POL: mint(pool, season, terms, max_premium, metadata)
   POL->>RP: premium_for(pool_id, coverage)
   RP-->>POL: premium (linear curve, rounded up)
   POL->>POL: premium <= max_premium? else QuoteMismatch

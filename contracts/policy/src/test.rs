@@ -68,19 +68,20 @@ fn setup() -> (Env, Address, Address, Address, u64, u64, Address) {
 fn mint_policy(env: &Env, pol_id: &Address, buyer: &Address, pool_id: u64, season_id: u64) -> u64 {
     let pol = PolicyClient::new(env, pol_id);
     let metadata = BytesN::from_array(env, &[7u8; 32]);
-    pol.mint(
-        buyer,
-        &pool_id,
-        &season_id,
-        &symbol_short!("KE_NAK"),
-        &COVERAGE,
-        &1u64,
-        &WINDOW_START,
-        &WINDOW_END,
-        &5_000u32,
-        &EXPECTED_PREMIUM,
-        &metadata,
-    )
+    pol.mint(buyer, &pool_id, &season_id, &standard_terms(), &EXPECTED_PREMIUM, &metadata)
+}
+
+// The reference set of policy terms used across the tests: one coverage unit in
+// region KE_NAK over the `[WINDOW_START, WINDOW_END)` window.
+fn standard_terms() -> PolicyTerms {
+    PolicyTerms {
+        region: symbol_short!("KE_NAK"),
+        coverage: COVERAGE,
+        index_ref: 1,
+        window_start: WINDOW_START,
+        window_end: WINDOW_END,
+        severity_curve: 5_000,
+    }
 }
 
 #[test]
@@ -156,12 +157,7 @@ fn mint_rejects_when_quote_exceeds_max_premium() {
         &buyer,
         &pool_id,
         &season_id,
-        &symbol_short!("KE_NAK"),
-        &COVERAGE,
-        &1u64,
-        &WINDOW_START,
-        &WINDOW_END,
-        &5_000u32,
+        &standard_terms(),
         &(EXPECTED_PREMIUM - 1),
         &metadata,
     );
@@ -174,31 +170,30 @@ fn mint_rejects_bad_coverage_and_window() {
     let pol = PolicyClient::new(&env, &pol_id);
     let metadata = BytesN::from_array(&env, &[7u8; 32]);
 
+    let zero_coverage = PolicyTerms {
+        coverage: 0,
+        ..standard_terms()
+    };
     let bad_coverage = pol.try_mint(
         &buyer,
         &pool_id,
         &season_id,
-        &symbol_short!("KE_NAK"),
-        &0i128,
-        &1u64,
-        &WINDOW_START,
-        &WINDOW_END,
-        &5_000u32,
+        &zero_coverage,
         &EXPECTED_PREMIUM,
         &metadata,
     );
     assert_eq!(bad_coverage, Err(Ok(Error::InvalidCoverage)));
 
+    let inverted_window = PolicyTerms {
+        window_start: WINDOW_END,
+        window_end: WINDOW_START,
+        ..standard_terms()
+    };
     let bad_window = pol.try_mint(
         &buyer,
         &pool_id,
         &season_id,
-        &symbol_short!("KE_NAK"),
-        &COVERAGE,
-        &1u64,
-        &WINDOW_END,
-        &WINDOW_START,
-        &5_000u32,
+        &inverted_window,
         &EXPECTED_PREMIUM,
         &metadata,
     );

@@ -65,6 +65,20 @@ pub struct PolicyRecord {
     pub state: PolicyState,
 }
 
+/// The terms a buyer specifies when minting a policy, grouped into one struct so
+/// `mint` stays within Soroban's ten parameter limit on exported functions.
+/// These map one to one onto the matching `PolicyRecord` fields.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PolicyTerms {
+    pub region: Symbol,
+    pub coverage: i128,
+    pub index_ref: u64,
+    pub window_start: u64,
+    pub window_end: u64,
+    pub severity_curve: u32,
+}
+
 /// Authoritative storage layout (`docs/ARCHITECTURE.md` section 5.2). Adding or
 /// changing a key updates that table in the same pull request.
 #[contracttype]
@@ -175,22 +189,24 @@ impl Policy {
     /// starts `Active` and records the gross paid and the net reserved (what a
     /// cancellation refunds). `metadata` is an opaque off chain pointer with no
     /// PII on chain. Returns the new policy id.
-    #[allow(clippy::too_many_arguments)]
     pub fn mint(
         env: Env,
         buyer: Address,
         pool_id: u64,
         season_id: u64,
-        region: Symbol,
-        coverage: i128,
-        index_ref: u64,
-        window_start: u64,
-        window_end: u64,
-        severity_curve: u32,
+        terms: PolicyTerms,
         max_premium: i128,
         metadata: BytesN<32>,
     ) -> Result<u64, Error> {
         buyer.require_auth();
+        let PolicyTerms {
+            region,
+            coverage,
+            index_ref,
+            window_start,
+            window_end,
+            severity_curve,
+        } = terms;
         if coverage <= 0 {
             return Err(Error::InvalidCoverage);
         }
