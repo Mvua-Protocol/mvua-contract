@@ -134,11 +134,17 @@ fn mint_creates_active_policy_and_collects_premium() {
 
     // Premium moved from buyer into the pool's season and reserves.
     assert_eq!(tok.balance(&buyer), 1_000_000 - EXPECTED_PREMIUM);
-    assert_eq!(rp.season(&pool_id, &season_id).premiums_in, EXPECTED_PREMIUM);
+    assert_eq!(
+        rp.season(&pool_id, &season_id).premiums_in,
+        EXPECTED_PREMIUM
+    );
     assert_eq!(rp.solvency(&pool_id).reserves, EXPECTED_PREMIUM);
 
     // Metadata pointer is stored opaquely and read back verbatim.
-    assert_eq!(pol.metadata(&policy_id), BytesN::from_array(&env, &[7u8; 32]));
+    assert_eq!(
+        pol.metadata(&policy_id),
+        BytesN::from_array(&env, &[7u8; 32])
+    );
 }
 
 #[test]
@@ -169,14 +175,32 @@ fn mint_rejects_bad_coverage_and_window() {
     let metadata = BytesN::from_array(&env, &[7u8; 32]);
 
     let bad_coverage = pol.try_mint(
-        &buyer, &pool_id, &season_id, &symbol_short!("KE_NAK"), &0i128, &1u64,
-        &WINDOW_START, &WINDOW_END, &5_000u32, &EXPECTED_PREMIUM, &metadata,
+        &buyer,
+        &pool_id,
+        &season_id,
+        &symbol_short!("KE_NAK"),
+        &0i128,
+        &1u64,
+        &WINDOW_START,
+        &WINDOW_END,
+        &5_000u32,
+        &EXPECTED_PREMIUM,
+        &metadata,
     );
     assert_eq!(bad_coverage, Err(Ok(Error::InvalidCoverage)));
 
     let bad_window = pol.try_mint(
-        &buyer, &pool_id, &season_id, &symbol_short!("KE_NAK"), &COVERAGE, &1u64,
-        &WINDOW_END, &WINDOW_START, &5_000u32, &EXPECTED_PREMIUM, &metadata,
+        &buyer,
+        &pool_id,
+        &season_id,
+        &symbol_short!("KE_NAK"),
+        &COVERAGE,
+        &1u64,
+        &WINDOW_END,
+        &WINDOW_START,
+        &5_000u32,
+        &EXPECTED_PREMIUM,
+        &metadata,
     );
     assert_eq!(bad_window, Err(Ok(Error::InvalidWindow)));
 }
