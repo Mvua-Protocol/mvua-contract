@@ -1,0 +1,16 @@
+[package]
+name = "test-utils"
+description = "Shared test fixtures and helpers for the Mvua Protocol contracts (dev only)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+common = { path = "../common" }

@@ -54,7 +54,7 @@ Everything an external reader needs is emitted as events and served by the index
 
 ## 3. Contract module map
 
-Five contracts plus one shared test crate. Each contract is a separate Wasm with its own storage; they never share storage, only call each other's published functions.
+Five contracts plus two shared library crates (`common` and `test-utils`). Each contract is a separate Wasm with its own storage; they never share storage, only call each other's published functions. The shared crates carry no on chain state: `common` is linked into every contract for cross cutting conventions, and `test-utils` is a dev dependency only.
 
 | Contract | Responsibility | Owns | Requirements |
 |---|---|---|---|
@@ -63,7 +63,8 @@ Five contracts plus one shared test crate. Each contract is a separate Wasm with
 | `oracle-adapter` | Publisher registry, signed observation ingestion and verification, median aggregation, staleness, challenge window, publisher fee ledger | Publisher keys, observation series per region and metric, challenge flags | FR-ORC-1 to 6 |
 | `trigger-engine` | Index definitions, deterministic index evaluation, trigger state machine, per policy severity payout calculation | Index definitions, trigger state per region and window | FR-TRG-1 to 5 |
 | `payout-vault` | Payout list computation, resumable batch payouts to claimable balances, payout events, emergency pause | Batch checkpoints, pause flag, payout ledger | FR-PAY-1 to 5 |
-| `test-utils` | Shared fixtures for tests only: account and token fixtures, season builder, observation builders | Nothing on chain (dev dependency) | supports NFR-SEC-2, testing standards |
+| `common` | Shared conventions linked into every contract: the shared error code range (900 to 999), value types (basis points), and storage TTL helpers | Nothing on chain (library) | supports NFR-SEC-1, section 6 |
+| `test-utils` | Shared fixtures for tests only: environment and ledger builders, account and token fixtures, time advance, assertion helpers | Nothing on chain (dev dependency) | supports NFR-SEC-2, testing standards |
 
 ### 3.1 Why these boundaries
 
@@ -192,7 +193,7 @@ Every contract defines exactly one `#[contracterror]` enum. Error codes are numb
 | `payout-vault` | 500 to 599 | `Paused` (500), `BatchComplete` (501), `NoFinalizedTrigger` (502), `PayoutExists` (503) |
 | shared or auth | 900 to 999 | `Unauthorized` (900), `TimelockPending` (901), `NotInitialized` (902), `Overflow` (903) |
 
-Rules: variants carry enough context to debug from an explorer; the README error table is regenerated from source whenever errors change (P1.8.5); a payout or value moving function returns a typed error rather than panicking (NFR-SEC-1). Arithmetic uses checked operations and returns `Overflow` (903) rather than wrapping.
+Rules: variants carry enough context to debug from an explorer; the README error table is regenerated from source whenever errors change (P1.8.5); a payout or value moving function returns a typed error rather than panicking (NFR-SEC-1). Arithmetic uses checked operations and returns `Overflow` (903) rather than wrapping. The shared 900 to 999 codes are documented once in the `common` crate (`error_codes`); each contract still defines its own `#[contracterror]` enum and includes those variants with these exact numeric values, so a code reads the same from any contract.
 
 ## 7. Authorization model
 

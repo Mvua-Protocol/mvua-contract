@@ -10,6 +10,15 @@
 
 [workspace]
 resolver = "2"
+members = [
+    "contracts/common",
+    "contracts/test-utils",
+    "contracts/risk-pool",
+    "contracts/policy",
+    "contracts/oracle-adapter",
+    "contracts/trigger-engine",
+    "contracts/payout-vault",
+]
 
 [workspace.package]
 version = "0.1.0"
