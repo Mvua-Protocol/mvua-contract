@@ -68,7 +68,14 @@ fn setup() -> (Env, Address, Address, Address, u64, u64, Address) {
 fn mint_policy(env: &Env, pol_id: &Address, buyer: &Address, pool_id: u64, season_id: u64) -> u64 {
     let pol = PolicyClient::new(env, pol_id);
     let metadata = BytesN::from_array(env, &[7u8; 32]);
-    pol.mint(buyer, &pool_id, &season_id, &standard_terms(), &EXPECTED_PREMIUM, &metadata)
+    pol.mint(
+        buyer,
+        &pool_id,
+        &season_id,
+        &standard_terms(),
+        &EXPECTED_PREMIUM,
+        &metadata,
+    )
 }
 
 // The reference set of policy terms used across the tests: one coverage unit in
