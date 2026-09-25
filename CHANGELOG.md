@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- `risk-pool` pool creation (`create_pool`): validates configuration, allocates a monotonic pool id, and initializes both tranches, the solvency record, and the treasury to zero (guardian only).
+- `risk-pool` tranche deposits (`deposit`): moves the pool token in and mints pro rata receipts, one to one into an empty tranche and pro rata to the existing supply thereafter, with per tranche caps.
+- `risk-pool` withdrawals (`withdraw`): burns receipts and releases the underlying, rejected when it would break the solvency invariant `reserves >= committed`, and blocked for the senior tranche while any payout is committed.
+- `risk-pool` read helpers (`pool_config`, `tranche`, `receipt`, `solvency`) and unit and property tests covering the deposit, withdrawal, and solvency guard paths.
 - Contract workspace scaffold (Sprint 1.1): the five contract crates `risk-pool`, `policy`, `oracle-adapter`, `trigger-engine`, and `payout-vault`, each with its `DataKey` storage layout, `#[contracterror]` error enum in its documented code range, and a guardian constructor.
 - `common` shared library crate: the shared error code range (900 to 999), basis point math, and storage TTL bump and extend helpers, linked into every contract.
 - `test-utils` shared library crate: environment and ledger fixtures, time and sequence advance, and assertion helpers for contract tests.

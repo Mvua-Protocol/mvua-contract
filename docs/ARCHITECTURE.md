@@ -132,9 +132,10 @@ Key naming: a `#[contracttype]` enum named `DataKey` per contract, variants in `
 | Key | Value | Durability | Notes |
 |---|---|---|---|
 | `Admin` | guardian config reference | Instance | Multisig address set at init |
+| `PoolCount` | u64 | Instance | Monotonic pool id source; ids start at 1 |
 | `PoolConfig(pool_id)` | token, region list, season length, premium curve params, tranche config, transferability default | Persistent | Immutable fields fixed at creation; parameter fields change only via timelock |
 | `Tranche(pool_id, tier)` | deposited amount, receipt supply | Persistent | `tier` is Junior or Senior |
-| `Receipt(pool_id, tier, holder)` | balance | Persistent | Pro rata claim on the tranche |
+| `Receipt(pool_id, tier, holder)` | balance | Persistent | Pro rata claim on the tranche; internal ledger, not a token (DR-0020) |
 | `Season(pool_id, season_id)` | state, opened_at, closes_at, premiums_in, payouts_committed, payouts_paid | Persistent | State machine in section 4 and 6 |
 | `Treasury(pool_id)` | protocol fees, publisher fees accrued | Persistent | Caps enforced from `PoolConfig` |
 | `Solvency(pool_id)` | reserves, committed | Persistent | Invariant: `reserves >= committed` at end of every mutating call |
@@ -186,7 +187,7 @@ Every contract defines exactly one `#[contracterror]` enum. Error codes are numb
 
 | Contract | Code range | Example variants |
 |---|---|---|
-| `risk-pool` | 100 to 199 | `PoolNotFound` (100), `InsufficientReserves` (101), `SolvencyViolated` (102), `SeasonNotOpen` (103), `TrancheWithdrawBlocked` (104), `FeeCapExceeded` (105) |
+| `risk-pool` | 100 to 199 | `PoolNotFound` (100), `InsufficientReserves` (101), `SolvencyViolated` (102), `SeasonNotOpen` (103), `TrancheWithdrawBlocked` (104), `FeeCapExceeded` (105), `InvalidConfig` (106), `InvalidAmount` (107), `InsufficientReceipts` (108), `TrancheCapExceeded` (109) |
 | `policy` | 200 to 299 | `PolicyNotFound` (200), `InvalidState` (201), `WindowStarted` (202), `NotTransferable` (203), `QuoteMismatch` (204) |
 | `oracle-adapter` | 300 to 399 | `UnknownPublisher` (300), `BadSignature` (301), `ObservationStale` (302), `Challenged` (303), `RegistryTimelock` (304) |
 | `trigger-engine` | 400 to 499 | `IndexNotFound` (400), `StaleIndex` (401), `AlreadyFinalized` (402), `NotTriggered` (403), `NonDeterministicInput` (404) |
@@ -233,7 +234,7 @@ These hold across contract boundaries and are the backbone of the Phase 5 invari
 
 ## 11. Open questions (resolve before or during Phase 1)
 
-1. Receipt token representation: internal ledger entries versus separate SAC token contracts per tranche. Leaning internal ledger for v1 to avoid extra deployment surface; confirm in P1.2.
+1. ~~Receipt token representation: internal ledger entries versus separate SAC token contracts per tranche.~~ **Resolved (DR-0020, 2026-09-25):** receipts are held as an internal per holder ledger (`Receipt(pool_id, tier, holder)`), not a separate token contract, for v1. Tranche transferability, if enabled, moves ledger balances within the contract.
 2. Observation ring size N and staleness bound X: placeholders until the index spec backtests inform them (see `INDEX-SPEC.md`).
 3. Whether `trigger-engine` reads `oracle-adapter` directly by cross contract call or receives a pushed median snapshot. Leaning direct read for a single source of truth; confirm in P1.6 and P1.7.
 4. Claimable balance predicate policy (claim window length, reclaim of unclaimed funds to the pool). Confirm in P1.8.
