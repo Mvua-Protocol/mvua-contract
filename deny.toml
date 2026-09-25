@@ -3,14 +3,29 @@
 [advisories]
 version = 2
 yanked = "deny"
+# Transitive, unmaintained-only advisories (no known vulnerability) pulled in by
+# the soroban-sdk and arkworks stacks. Both are compile-time proc-macro helpers
+# with no runtime attack surface, we do not depend on either directly, and there
+# is no maintained drop-in. Revisit when soroban-sdk stops pulling them in.
+ignore = [
+    "RUSTSEC-2024-0436", # paste 1.0.15 is unmaintained (via soroban-sdk)
+    "RUSTSEC-2024-0388", # derivative 2.2.0 is unmaintained (via arkworks)
+]
 
 [licenses]
 version = 2
-allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Unicode-3.0"]
+# Unicode-DFS-2016 is required by unicode-ident, licensed
+# "(MIT OR Apache-2.0) AND Unicode-DFS-2016". It is a permissive data license
+# for Unicode tables, not copyleft.
+allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Unicode-3.0", "Unicode-DFS-2016"]
 
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# The workspace's own crates (common, test-utils) are referenced by path with no
+# version, which cargo-deny would otherwise flag as wildcards. They are first
+# party code, not an external supply-chain surface.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"
