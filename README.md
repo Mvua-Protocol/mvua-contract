@@ -73,7 +73,7 @@ The workspace is a set of focused Soroban contract crates plus shared support cr
 |---|---|---|
 | `common` | Shared error codes, value types, basis point math, and storage TTL helpers | shared, in use |
 | `risk-pool` | Pool creation, tranches, premiums, season lifecycle, settlement | **implemented** (see below) |
-| `policy` | Policy certificates and lifecycle | scaffolded |
+| `policy` | Policy certificates and lifecycle | **implemented** (see below) |
 | `oracle-adapter` | Publisher registry, ed25519 signed observations, median aggregation | scaffolded |
 | `trigger-engine` | Index definitions and deterministic evaluation | scaffolded |
 | `payout-vault` | Resumable batch payouts to claimable balances, pause | scaffolded |
@@ -92,6 +92,17 @@ The risk pool is the furthest along. It currently supports the full capital and 
 - **Reads**: `pool_config`, `tranche`, `receipt`, `solvency`, `season`, and `treasury` expose state for the app and indexer.
 
 Full rationale for the settlement model is recorded in the design decision log (private planning repo, DR-0021).
+
+### policy: what is implemented
+
+The policy contract is the buyer facing certificate and its lifecycle. It holds no value itself: premiums flow into the risk pool and refunds flow back out of it.
+
+- **Quote and mint**: `quote` prices coverage against the pool's provisional linear curve, and `mint` re-quotes, checks the price against the buyer's `max_premium`, collects the premium into the risk pool, and mints an `Active` certificate recording the gross paid and the net reserved.
+- **Lifecycle**: a forward state machine, `Active` to `Triggered` to `Paid` for a claim, `Active` to `Expired` after the coverage window, and `Active` to `Cancelled` before it opens. `mark_triggered` and `mark_paid` are guardian only; `expire` is permissionless once the window has ended.
+- **Cancellation**: an owner may `cancel` before the coverage window opens, which refunds the reserved net premium from the risk pool (fees already accrued to the treasury are not reversed).
+- **Off chain metadata**: each policy carries an opaque `BytesN<32>` pointer (`set_metadata`, `metadata`) that resolves off chain, so no personally identifying information is ever stored on chain.
+
+The premium curve is a documented placeholder pending calibration against the index model (private planning repo, DR-0022).
 
 <!-- PLACEHOLDER_TAIL -->
 
