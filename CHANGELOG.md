@@ -23,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Threat model (`docs/THREAT-MODEL.md`): assets, trust boundaries, adversary list, and twenty threats with mitigations mapped to requirement IDs.
 - Index definition specification (`docs/INDEX-SPEC.md`): rainfall shortfall and consecutive dry days formulas with integer math, severity curve, staleness rules, and golden test vectors.
 - Upgrade and governance specification (`docs/UPGRADE-GOVERNANCE.md`): guardian multisig responsibilities, timelock flow, and per contract migration procedures.
+- Brand assets in `assets/` (raindrop logo, horizontal lockup, and a system map README banner) and a rewritten README with the project system diagram, the repository's place in the whole project, per crate status, and a summary of the implemented risk-pool lifecycle.
 
 ## [0.1.0] - 2026-09-12
 
