@@ -28,6 +28,12 @@ fn setup_pool(junior_cap: i128) -> (Env, Address, Address, u64, Address) {
             junior_cap,
             senior_cap: 0,
         },
+        fee: FeeConfig {
+            protocol_bps: 0,
+            publisher_bps: 0,
+            protocol_cap: 0,
+            publisher_cap: 0,
+        },
         transferable: false,
     };
     let pool_id = client.create_pool(&config);
@@ -96,6 +102,12 @@ fn create_pool_rejects_empty_regions() {
         tranche: TrancheConfig {
             junior_cap: 0,
             senior_cap: 0,
+        },
+        fee: FeeConfig {
+            protocol_bps: 0,
+            publisher_bps: 0,
+            protocol_cap: 0,
+            publisher_cap: 0,
         },
         transferable: false,
     };
@@ -291,5 +303,274 @@ fn solvency_invariant_holds_across_committed_levels() {
         }
         let solvency = client.solvency(&pool_id);
         assert!(solvency.reserves >= solvency.committed);
+    }
+}
+
+// ----- Sprint 1.3: season lifecycle, premiums and fees, settlement -----
+
+// Register a pool with the given fee schedule and fund a premium payer with a
+// large balance. Tranche and premium params mirror `setup_pool`.
+fn setup_pool_with_fees(
+    protocol_bps: u32,
+    publisher_bps: u32,
+    protocol_cap: i128,
+    publisher_cap: i128,
+) -> (Env, Address, Address, u64, Address) {
+    let env = new_env();
+    let admin = random_address(&env);
+    let issuer = random_address(&env);
+    let token = env.register_stellar_asset_contract_v2(issuer).address();
+    let contract_id = env.register(RiskPool, (admin,));
+    let client = RiskPoolClient::new(&env, &contract_id);
+
+    let mut regions = Vec::new(&env);
+    regions.push_back(symbol_short!("KE_NAK"));
+    let config = PoolConfig {
+        token: token.clone(),
+        regions,
+        season_length: 100,
+        premium: PremiumParams {
+            base_bps: 100,
+            coverage_slope_bps: 10,
+        },
+        tranche: TrancheConfig {
+            junior_cap: 0,
+            senior_cap: 0,
+        },
+        fee: FeeConfig {
+            protocol_bps,
+            publisher_bps,
+            protocol_cap,
+            publisher_cap,
+        },
+        transferable: false,
+    };
+    let pool_id = client.create_pool(&config);
+    let payer = random_address(&env);
+    token::StellarAssetClient::new(&env, &token).mint(&payer, &1_000_000);
+    (env, contract_id, token, pool_id, payer)
+}
+
+// Seed a season's realized payouts directly, standing in for the payout-vault
+// path that will set it in a later sprint.
+fn set_payouts_paid(env: &Env, contract_id: &Address, pool_id: u64, season_id: u64, paid: i128) {
+    env.as_contract(contract_id, || {
+        let key = DataKey::Season(pool_id, season_id);
+        let mut season: Season = env.storage().persistent().get(&key).unwrap();
+        season.payouts_paid = paid;
+        env.storage().persistent().set(&key, &season);
+    });
+}
+
+#[test]
+fn open_season_allocates_ids_and_starts_open() {
+    let (env, contract_id, _token, pool_id, _depositor) = setup_pool(0);
+    let client = RiskPoolClient::new(&env, &contract_id);
+
+    let first = client.open_season(&pool_id);
+    let second = client.open_season(&pool_id);
+    assert_eq!(first, 1);
+    assert_eq!(second, 2);
+
+    let season = client.season(&pool_id, &first);
+    assert_eq!(season.state, SeasonState::Open);
+    assert_eq!(season.premiums_in, 0);
+    // Window is opened_at plus the pool's season length (100).
+    assert_eq!(season.closes_at - season.opened_at, 100);
+}
+
+#[test]
+fn season_transitions_open_active_closed() {
+    let (env, contract_id, _token, pool_id, _depositor) = setup_pool(0);
+    let client = RiskPoolClient::new(&env, &contract_id);
+    let season_id = client.open_season(&pool_id);
+
+    client.activate_season(&pool_id, &season_id);
+    assert_eq!(
+        client.season(&pool_id, &season_id).state,
+        SeasonState::Active
+    );
+    client.close_season(&pool_id, &season_id);
+    assert_eq!(
+        client.season(&pool_id, &season_id).state,
+        SeasonState::Closed
+    );
+}
+
+#[test]
+fn illegal_season_transitions_are_rejected() {
+    let (env, contract_id, _token, pool_id, _depositor) = setup_pool(0);
+    let client = RiskPoolClient::new(&env, &contract_id);
+    let season_id = client.open_season(&pool_id);
+
+    // Cannot close a season that is still Open (must be Active first).
+    assert_eq!(
+        client.try_close_season(&pool_id, &season_id),
+        Err(Ok(Error::InvalidSeasonState))
+    );
+    // Cannot activate twice.
+    client.activate_season(&pool_id, &season_id);
+    assert_eq!(
+        client.try_activate_season(&pool_id, &season_id),
+        Err(Ok(Error::InvalidSeasonState))
+    );
+}
+
+#[test]
+fn season_read_unknown_is_not_found() {
+    let (env, contract_id, _token, pool_id, _depositor) = setup_pool(0);
+    let client = RiskPoolClient::new(&env, &contract_id);
+    assert_eq!(
+        client.try_season(&pool_id, &999),
+        Err(Ok(Error::SeasonNotFound))
+    );
+}
+
+#[test]
+fn settle_rejected_unless_closed() {
+    let (env, contract_id, _token, pool_id, _depositor) = setup_pool(0);
+    let client = RiskPoolClient::new(&env, &contract_id);
+    let season_id = client.open_season(&pool_id);
+    // Open, not Closed.
+    assert_eq!(
+        client.try_settle_season(&pool_id, &season_id),
+        Err(Ok(Error::InvalidSeasonState))
+    );
+}
+
+#[test]
+fn collect_premium_accrues_fees_and_credits_net() {
+    // 1 percent protocol, 0.5 percent publisher, uncapped.
+    let (env, contract_id, token, pool_id, payer) = setup_pool_with_fees(100, 50, 0, 0);
+    let client = RiskPoolClient::new(&env, &contract_id);
+    let token_client = token::TokenClient::new(&env, &token);
+    let season_id = client.open_season(&pool_id);
+    client.activate_season(&pool_id, &season_id);
+
+    // 1000 premium: 10 protocol, 5 publisher, 985 net.
+    let net = client.collect_premium(&pool_id, &season_id, &payer, &1_000);
+    assert_eq!(net, 985);
+
+    let season = client.season(&pool_id, &season_id);
+    assert_eq!(season.premiums_in, 985);
+    let treasury = client.treasury(&pool_id);
+    assert_eq!(treasury.protocol_fees, 10);
+    assert_eq!(treasury.publisher_fees, 5);
+    // Net premium backs coverage; fees are held but not counted as reserves.
+    assert_eq!(client.solvency(&pool_id).reserves, 985);
+    // The full gross moved into the contract.
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+    assert_eq!(token_client.balance(&payer), 999_000);
+}
+
+#[test]
+fn collect_premium_respects_fee_caps() {
+    // 10 percent protocol fee, capped at 15 in absolute terms.
+    let (env, contract_id, _token, pool_id, payer) = setup_pool_with_fees(1_000, 0, 15, 0);
+    let client = RiskPoolClient::new(&env, &contract_id);
+    let season_id = client.open_season(&pool_id);
+    client.activate_season(&pool_id, &season_id);
+
+    // First 100 premium: desired fee 10, room 15, accrues 10.
+    client.collect_premium(&pool_id, &season_id, &payer, &100);
+    assert_eq!(client.treasury(&pool_id).protocol_fees, 10);
+    // Second 100: desired 10 but only 5 of cap remains, so fee is clamped to 5.
+    let net = client.collect_premium(&pool_id, &season_id, &payer, &100);
+    assert_eq!(net, 95);
+    assert_eq!(client.treasury(&pool_id).protocol_fees, 15);
+    // A third premium accrues no further protocol fee (cap reached).
+    let net3 = client.collect_premium(&pool_id, &season_id, &payer, &100);
+    assert_eq!(net3, 100);
+    assert_eq!(client.treasury(&pool_id).protocol_fees, 15);
+}
+
+#[test]
+fn collect_premium_rejected_when_season_not_open() {
+    let (env, contract_id, _token, pool_id, payer) = setup_pool_with_fees(0, 0, 0, 0);
+    let client = RiskPoolClient::new(&env, &contract_id);
+    let season_id = client.open_season(&pool_id);
+    client.activate_season(&pool_id, &season_id);
+    client.close_season(&pool_id, &season_id);
+    // Closed seasons no longer accept premiums.
+    assert_eq!(
+        client.try_collect_premium(&pool_id, &season_id, &payer, &100),
+        Err(Ok(Error::SeasonNotOpen))
+    );
+}
+
+#[test]
+fn collect_premium_rejects_bad_inputs() {
+    let (env, contract_id, _token, pool_id, payer) = setup_pool_with_fees(0, 0, 0, 0);
+    let client = RiskPoolClient::new(&env, &contract_id);
+    let season_id = client.open_season(&pool_id);
+    assert_eq!(
+        client.try_collect_premium(&pool_id, &season_id, &payer, &0),
+        Err(Ok(Error::InvalidAmount))
+    );
+    assert_eq!(
+        client.try_collect_premium(&pool_id, &999, &payer, &100),
+        Err(Ok(Error::SeasonNotFound))
+    );
+}
+
+#[test]
+fn settle_credits_surplus_to_junior_and_reaches_holders() {
+    // No fees, so the whole premium is surplus at settlement.
+    let (env, contract_id, _token, pool_id, payer) = setup_pool_with_fees(0, 0, 0, 0);
+    let client = RiskPoolClient::new(&env, &contract_id);
+
+    // Junior provides 1000 of capital; a 300 premium comes in over the season.
+    client.deposit(&pool_id, &Tier::Junior, &payer, &1_000);
+    let season_id = client.open_season(&pool_id);
+    client.activate_season(&pool_id, &season_id);
+    client.collect_premium(&pool_id, &season_id, &payer, &300);
+    client.close_season(&pool_id, &season_id);
+
+    let net = client.settle_season(&pool_id, &season_id);
+    assert_eq!(net, 300);
+    assert_eq!(
+        client.season(&pool_id, &season_id).state,
+        SeasonState::Settled
+    );
+    // Surplus lifts junior deposited to 1300 against an unchanged 1000 supply.
+    let junior = client.tranche(&pool_id, &Tier::Junior);
+    assert_eq!(junior.deposited, 1_300);
+    assert_eq!(junior.supply, 1_000);
+    // The holder's receipts are now worth the premium yield: 1000 -> 1300.
+    let released = client.withdraw(&pool_id, &Tier::Junior, &payer, &1_000);
+    assert_eq!(released, 1_300);
+}
+
+#[test]
+fn settle_absorbs_loss_junior_first_then_senior() {
+    // Property: a season loss reduces junior capital first, then senior, and
+    // never drives either tranche's deposited below zero.
+    for loss in [0i128, 500, 1_000, 1_500, 2_000, 2_500] {
+        let (env, contract_id, token, pool_id, payer) = setup_pool_with_fees(0, 0, 0, 0);
+        let client = RiskPoolClient::new(&env, &contract_id);
+        let second = random_address(&env);
+        token::StellarAssetClient::new(&env, &token).mint(&second, &1_000_000);
+
+        client.deposit(&pool_id, &Tier::Junior, &payer, &1_000);
+        client.deposit(&pool_id, &Tier::Senior, &second, &1_000);
+        let season_id = client.open_season(&pool_id);
+        client.activate_season(&pool_id, &season_id);
+        client.close_season(&pool_id, &season_id);
+        // premiums_in is 0, so payouts_paid becomes a pure loss.
+        set_payouts_paid(&env, &contract_id, pool_id, season_id, loss);
+
+        let net = client.settle_season(&pool_id, &season_id);
+        assert_eq!(net, -loss);
+
+        let expected_junior = (1_000 - loss).max(0);
+        let expected_senior = (2_000 - loss).clamp(0, 1_000);
+        assert_eq!(
+            client.tranche(&pool_id, &Tier::Junior).deposited,
+            expected_junior
+        );
+        assert_eq!(
+            client.tranche(&pool_id, &Tier::Senior).deposited,
+            expected_senior
+        );
     }
 }

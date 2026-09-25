@@ -3,15 +3,18 @@
 //!
 //! Owns pool configuration, tranche balances and receipts, season state, the
 //! treasury, and the solvency record. It is the single enforcement point for
-//! the solvency invariant `reserves >= committed` (FR-POOL-5). Sprint 1.2 adds
+//! the solvency invariant `reserves >= committed` (FR-POOL-5). Sprint 1.2 added
 //! pool creation (FR-POOL-1), tranche deposits with pro rata receipts
 //! (FR-POOL-2), and the withdraw path guarded by solvency (FR-POOL-3,
-//! FR-POOL-5). Receipts are held as an internal ledger, not a separate token
-//! contract (DR-0020). Premium accounting and season settlement land later.
+//! FR-POOL-5). Sprint 1.3 adds the season lifecycle (FR-POOL-6), premium intake
+//! with capped protocol and publisher fees (FR-POOL-7, FR-ACC-1), and the
+//! settlement waterfall that credits surplus to junior and absorbs losses
+//! junior first then senior. Receipts are held as an internal ledger, not a
+//! separate token contract (DR-0020).
 //!
 //! Requirements: FR-POOL-1 to 7, FR-ACC-1, FR-ACC-3.
 
-use common::{extend_instance_ttl, extend_persistent_ttl};
+use common::{apply_bps, extend_instance_ttl, extend_persistent_ttl};
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, token, Address, Env,
     Symbol, Vec,
@@ -46,6 +49,22 @@ pub struct TrancheConfig {
     pub senior_cap: i128,
 }
 
+/// Fee schedule applied to each premium (FR-POOL-7). Rates are basis points of
+/// the gross premium; a cap of zero means the accrued fee of that kind is
+/// uncapped. Protocol and publisher rates together must not exceed 100 percent.
+#[contracttype]
+#[derive(Clone)]
+pub struct FeeConfig {
+    /// Protocol fee rate in basis points of each premium.
+    pub protocol_bps: u32,
+    /// Publisher fee rate in basis points of each premium.
+    pub publisher_bps: u32,
+    /// Absolute cap on total accrued protocol fees (zero means uncapped).
+    pub protocol_cap: i128,
+    /// Absolute cap on total accrued publisher fees (zero means uncapped).
+    pub publisher_cap: i128,
+}
+
 /// Immutable and parameterized pool configuration. Immutable fields are fixed
 /// at creation; parameter fields change only via timelock (a later sprint).
 #[contracttype]
@@ -61,6 +80,8 @@ pub struct PoolConfig {
     pub premium: PremiumParams,
     /// Per tranche deposit caps.
     pub tranche: TrancheConfig,
+    /// Protocol and publisher fee schedule applied to premiums.
+    pub fee: FeeConfig,
     /// Default transferability of receipts for this pool.
     pub transferable: bool,
 }
@@ -71,6 +92,36 @@ pub struct PoolConfig {
 pub struct TrancheState {
     pub deposited: i128,
     pub supply: i128,
+}
+
+/// Season lifecycle state (FR-POOL-6). Transitions run strictly forward:
+/// `Open -> Active -> Closed -> Settled`. Any other transition is rejected.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SeasonState {
+    /// Enrollment: premiums are collected and coverage has not started.
+    Open,
+    /// Coverage window is live; premiums are still accepted and payouts commit.
+    Active,
+    /// Coverage window ended; awaiting settlement. No premiums, no new payouts.
+    Closed,
+    /// Surplus distributed and fees swept; terminal.
+    Settled,
+}
+
+/// One underwriting season for a pool: its lifecycle state, window, and the
+/// running premium and payout totals that settlement reconciles (FR-POOL-6,
+/// FR-ACC-1). `premiums_in` is net of fees; `payouts_paid` is the underlying
+/// already released to triggered policies during the season.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Season {
+    pub state: SeasonState,
+    pub opened_at: u64,
+    pub closes_at: u64,
+    pub premiums_in: i128,
+    pub payouts_committed: i128,
+    pub payouts_paid: i128,
 }
 
 /// Solvency record for a pool. The invariant `reserves >= committed` must hold
@@ -99,6 +150,8 @@ pub enum DataKey {
     Admin,
     /// Monotonic counter for allocating pool ids. Instance durability.
     PoolCount,
+    /// Monotonic counter for allocating season ids within a pool.
+    SeasonCount(u64),
     /// Per pool configuration: token, regions, season length, curve, tranches.
     PoolConfig(u64),
     /// Deposited amount and receipt supply for a pool tranche.
@@ -130,6 +183,8 @@ pub enum Error {
     InvalidAmount = 107,
     InsufficientReceipts = 108,
     TrancheCapExceeded = 109,
+    InvalidSeasonState = 110,
+    SeasonNotFound = 111,
     Unauthorized = 900,
     TimelockPending = 901,
     NotInitialized = 902,
@@ -162,6 +217,48 @@ pub struct Withdrawn {
     pub underlying: i128,
 }
 
+/// Emitted when a season opens. Topic `season_opened`; data is the detail.
+#[contractevent(topics = ["season_opened"], data_format = "map")]
+pub struct SeasonOpened {
+    pub pool_id: u64,
+    pub season_id: u64,
+    pub opened_at: u64,
+    pub closes_at: u64,
+}
+
+/// Emitted when a season changes state (activate, close). Topic
+/// `season_state`; data is the pool, season, and the new state.
+#[contractevent(topics = ["season_state"], data_format = "map")]
+pub struct SeasonStateChanged {
+    pub pool_id: u64,
+    pub season_id: u64,
+    pub state: SeasonState,
+}
+
+/// Emitted on premium intake. Topic `premium`; data is the gross, the net
+/// credited to the season, and the protocol and publisher fees accrued.
+#[contractevent(topics = ["premium"], data_format = "map")]
+pub struct PremiumCollected {
+    pub pool_id: u64,
+    pub season_id: u64,
+    pub from: Address,
+    pub gross: i128,
+    pub net: i128,
+    pub protocol_fee: i128,
+    pub publisher_fee: i128,
+}
+
+/// Emitted when a season settles. Topic `season_settled`; data is the season
+/// totals and the signed net result distributed by the tranche waterfall.
+#[contractevent(topics = ["season_settled"], data_format = "map")]
+pub struct SeasonSettled {
+    pub pool_id: u64,
+    pub season_id: u64,
+    pub premiums_in: i128,
+    pub payouts_paid: i128,
+    pub net: i128,
+}
+
 #[contract]
 pub struct RiskPool;
 
@@ -189,12 +286,7 @@ impl RiskPool {
     /// allocates a pool id, and initializes both tranches, the solvency
     /// record, and the treasury to zero. Returns the new pool id.
     pub fn create_pool(env: Env, config: PoolConfig) -> Result<u64, Error> {
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::NotInitialized)?;
-        admin.require_auth();
+        require_admin(&env)?;
 
         if config.regions.is_empty() || config.season_length == 0 {
             return Err(Error::InvalidConfig);
@@ -203,6 +295,17 @@ impl RiskPool {
             return Err(Error::InvalidConfig);
         }
         if config.tranche.junior_cap < 0 || config.tranche.senior_cap < 0 {
+            return Err(Error::InvalidConfig);
+        }
+        if config.fee.protocol_cap < 0 || config.fee.publisher_cap < 0 {
+            return Err(Error::InvalidConfig);
+        }
+        // Each rate is a valid fraction and, combined, cannot claim more than
+        // the whole premium. Bounding each first keeps the sum from overflowing.
+        if config.fee.protocol_bps > 10_000 || config.fee.publisher_bps > 10_000 {
+            return Err(Error::InvalidConfig);
+        }
+        if config.fee.protocol_bps + config.fee.publisher_bps > 10_000 {
             return Err(Error::InvalidConfig);
         }
 
@@ -423,6 +526,196 @@ impl RiskPool {
     pub fn solvency(env: Env, pool_id: u64) -> Result<SolvencyState, Error> {
         read_solvency(&env, pool_id)
     }
+
+    /// Open a new season for a pool (FR-POOL-6). Guardian only. Allocates a
+    /// season id, derives the coverage window from the pool's season length,
+    /// and starts the season in `Open`. Returns the new season id.
+    pub fn open_season(env: Env, pool_id: u64) -> Result<u64, Error> {
+        require_admin(&env)?;
+        let config = read_config(&env, pool_id)?;
+
+        let season_id = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SeasonCount(pool_id))
+            .unwrap_or(0u64)
+            .checked_add(1)
+            .ok_or(Error::Overflow)?;
+        write_persistent(&env, &DataKey::SeasonCount(pool_id), &season_id);
+
+        let opened_at = env.ledger().timestamp();
+        let closes_at = opened_at
+            .checked_add(config.season_length)
+            .ok_or(Error::Overflow)?;
+        let season = Season {
+            state: SeasonState::Open,
+            opened_at,
+            closes_at,
+            premiums_in: 0,
+            payouts_committed: 0,
+            payouts_paid: 0,
+        };
+        write_persistent(&env, &DataKey::Season(pool_id, season_id), &season);
+
+        extend_instance_ttl(&env);
+        SeasonOpened {
+            pool_id,
+            season_id,
+            opened_at,
+            closes_at,
+        }
+        .publish(&env);
+        Ok(season_id)
+    }
+
+    /// Move a season from `Open` to `Active` (FR-POOL-6). Guardian only. Any
+    /// other starting state is rejected with `InvalidSeasonState` (110).
+    pub fn activate_season(env: Env, pool_id: u64, season_id: u64) -> Result<(), Error> {
+        transition_season(
+            &env,
+            pool_id,
+            season_id,
+            SeasonState::Open,
+            SeasonState::Active,
+        )
+    }
+
+    /// Move a season from `Active` to `Closed` (FR-POOL-6). Guardian only. Any
+    /// other starting state is rejected with `InvalidSeasonState` (110).
+    pub fn close_season(env: Env, pool_id: u64, season_id: u64) -> Result<(), Error> {
+        transition_season(
+            &env,
+            pool_id,
+            season_id,
+            SeasonState::Active,
+            SeasonState::Closed,
+        )
+    }
+
+    /// Collect a premium into a season (FR-POOL-4 custody, FR-POOL-7 fees).
+    /// Requires the payer's authorization. Splits the capped protocol and
+    /// publisher fees to the treasury and credits the net premium to the season
+    /// and to reserves. Accepted only while the season is `Open` or `Active`
+    /// (else `SeasonNotOpen`, 103). Returns the net premium credited.
+    pub fn collect_premium(
+        env: Env,
+        pool_id: u64,
+        season_id: u64,
+        from: Address,
+        amount: i128,
+    ) -> Result<i128, Error> {
+        from.require_auth();
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let config = read_config(&env, pool_id)?;
+        let mut season = read_season(&env, pool_id, season_id)?;
+        if season.state != SeasonState::Open && season.state != SeasonState::Active {
+            return Err(Error::SeasonNotOpen);
+        }
+
+        let mut treasury = read_treasury(&env, pool_id)?;
+        let protocol_fee = accrue_fee(
+            amount,
+            config.fee.protocol_bps,
+            treasury.protocol_fees,
+            config.fee.protocol_cap,
+        )?;
+        let publisher_fee = accrue_fee(
+            amount,
+            config.fee.publisher_bps,
+            treasury.publisher_fees,
+            config.fee.publisher_cap,
+        )?;
+        let net = amount
+            .checked_sub(protocol_fee)
+            .and_then(|v| v.checked_sub(publisher_fee))
+            .ok_or(Error::Overflow)?;
+
+        token::TokenClient::new(&env, &config.token).transfer(
+            &from,
+            env.current_contract_address(),
+            &amount,
+        );
+
+        treasury.protocol_fees = treasury
+            .protocol_fees
+            .checked_add(protocol_fee)
+            .ok_or(Error::Overflow)?;
+        treasury.publisher_fees = treasury
+            .publisher_fees
+            .checked_add(publisher_fee)
+            .ok_or(Error::Overflow)?;
+        write_persistent(&env, &DataKey::Treasury(pool_id), &treasury);
+
+        season.premiums_in = season.premiums_in.checked_add(net).ok_or(Error::Overflow)?;
+        write_persistent(&env, &DataKey::Season(pool_id, season_id), &season);
+
+        let mut solvency = read_solvency(&env, pool_id)?;
+        solvency.reserves = solvency.reserves.checked_add(net).ok_or(Error::Overflow)?;
+        write_persistent(&env, &DataKey::Solvency(pool_id), &solvency);
+
+        extend_instance_ttl(&env);
+        PremiumCollected {
+            pool_id,
+            season_id,
+            from,
+            gross: amount,
+            net,
+            protocol_fee,
+            publisher_fee,
+        }
+        .publish(&env);
+        Ok(net)
+    }
+
+    /// Settle a `Closed` season (FR-POOL-6, settlement waterfall). Guardian
+    /// only. A surplus (net premiums over payouts) is credited to the junior
+    /// tranche as residual yield; a loss is absorbed by junior capital first
+    /// and then senior. Moves the season to `Settled` and returns the signed
+    /// net result. Rejects any state other than `Closed` (`InvalidSeasonState`,
+    /// 110).
+    pub fn settle_season(env: Env, pool_id: u64, season_id: u64) -> Result<i128, Error> {
+        require_admin(&env)?;
+        let mut season = read_season(&env, pool_id, season_id)?;
+        if season.state != SeasonState::Closed {
+            return Err(Error::InvalidSeasonState);
+        }
+        let net = season
+            .premiums_in
+            .checked_sub(season.payouts_paid)
+            .ok_or(Error::Overflow)?;
+
+        if net > 0 {
+            credit_junior_surplus(&env, pool_id, net)?;
+        } else if net < 0 {
+            absorb_loss(&env, pool_id, net.checked_neg().ok_or(Error::Overflow)?)?;
+        }
+
+        season.state = SeasonState::Settled;
+        write_persistent(&env, &DataKey::Season(pool_id, season_id), &season);
+
+        extend_instance_ttl(&env);
+        SeasonSettled {
+            pool_id,
+            season_id,
+            premiums_in: season.premiums_in,
+            payouts_paid: season.payouts_paid,
+            net,
+        }
+        .publish(&env);
+        Ok(net)
+    }
+
+    /// Read a season's record, or `SeasonNotFound` (111).
+    pub fn season(env: Env, pool_id: u64, season_id: u64) -> Result<Season, Error> {
+        read_season(&env, pool_id, season_id)
+    }
+
+    /// Read a pool's accrued treasury fees, or `PoolNotFound` (100).
+    pub fn treasury(env: Env, pool_id: u64) -> Result<TreasuryState, Error> {
+        read_treasury(&env, pool_id)
+    }
 }
 
 /// Persist a value under `key` and extend its TTL in one step.
@@ -460,6 +753,107 @@ fn read_solvency(env: &Env, pool_id: u64) -> Result<SolvencyState, Error> {
         .persistent()
         .get(&DataKey::Solvency(pool_id))
         .ok_or(Error::PoolNotFound)
+}
+
+fn read_season(env: &Env, pool_id: u64, season_id: u64) -> Result<Season, Error> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Season(pool_id, season_id))
+        .ok_or(Error::SeasonNotFound)
+}
+
+fn read_treasury(env: &Env, pool_id: u64) -> Result<TreasuryState, Error> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Treasury(pool_id))
+        .ok_or(Error::PoolNotFound)
+}
+
+/// Read the guardian admin and require its authorization, or fail with
+/// `NotInitialized` (902) if the contract was never constructed.
+fn require_admin(env: &Env) -> Result<(), Error> {
+    let admin: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::Admin)
+        .ok_or(Error::NotInitialized)?;
+    admin.require_auth();
+    Ok(())
+}
+
+/// Apply a forward season transition. Guardian only. Rejects a season whose
+/// current state is not `from` with `InvalidSeasonState` (110).
+fn transition_season(
+    env: &Env,
+    pool_id: u64,
+    season_id: u64,
+    from: SeasonState,
+    to: SeasonState,
+) -> Result<(), Error> {
+    require_admin(env)?;
+    let mut season = read_season(env, pool_id, season_id)?;
+    if season.state != from {
+        return Err(Error::InvalidSeasonState);
+    }
+    season.state = to;
+    write_persistent(env, &DataKey::Season(pool_id, season_id), &season);
+    extend_instance_ttl(env);
+    SeasonStateChanged {
+        pool_id,
+        season_id,
+        state: to,
+    }
+    .publish(env);
+    Ok(())
+}
+
+/// Compute the fee to accrue on `amount` at `bps`, clamped so the running
+/// `accrued` total never exceeds `cap` (a cap of zero means uncapped). Returns
+/// `Overflow` (903) on checked arithmetic failure.
+fn accrue_fee(amount: i128, bps: u32, accrued: i128, cap: i128) -> Result<i128, Error> {
+    let desired = apply_bps(amount, bps).ok_or(Error::Overflow)?;
+    if cap == 0 {
+        return Ok(desired);
+    }
+    let room = cap.checked_sub(accrued).unwrap_or(0).max(0);
+    Ok(desired.min(room))
+}
+
+/// Credit a settlement surplus to the junior tranche as residual yield, raising
+/// the junior receipt share price.
+fn credit_junior_surplus(env: &Env, pool_id: u64, surplus: i128) -> Result<(), Error> {
+    let mut junior = read_tranche(env, pool_id, Tier::Junior);
+    junior.deposited = junior
+        .deposited
+        .checked_add(surplus)
+        .ok_or(Error::Overflow)?;
+    write_persistent(env, &DataKey::Tranche(pool_id, Tier::Junior), &junior);
+    Ok(())
+}
+
+/// Absorb a settlement loss against tranche capital, junior first then senior.
+/// Any residual beyond both tranches' capital is left unabsorbed; the solvency
+/// invariant on the payout path prevents committing more than reserves cover.
+fn absorb_loss(env: &Env, pool_id: u64, loss: i128) -> Result<(), Error> {
+    let mut junior = read_tranche(env, pool_id, Tier::Junior);
+    let from_junior = loss.min(junior.deposited);
+    junior.deposited = junior
+        .deposited
+        .checked_sub(from_junior)
+        .ok_or(Error::Overflow)?;
+    write_persistent(env, &DataKey::Tranche(pool_id, Tier::Junior), &junior);
+
+    let remainder = loss.checked_sub(from_junior).ok_or(Error::Overflow)?;
+    if remainder > 0 {
+        let mut senior = read_tranche(env, pool_id, Tier::Senior);
+        let from_senior = remainder.min(senior.deposited);
+        senior.deposited = senior
+            .deposited
+            .checked_sub(from_senior)
+            .ok_or(Error::Overflow)?;
+        write_persistent(env, &DataKey::Tranche(pool_id, Tier::Senior), &senior);
+    }
+    Ok(())
 }
 
 /// Multiply then divide with i128 checked arithmetic. Returns `None` on
