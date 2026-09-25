@@ -82,18 +82,18 @@ sequenceDiagram
   participant Buyer as Buyer (app or cooperative)
   participant POL as policy
   participant RP as risk-pool
-  participant TE as trigger-engine
-  Buyer->>POL: buy(region, coverage, index_ref, window)
-  POL->>TE: quote inputs valid? index_ref exists?
-  POL->>RP: premium_for(pool, coverage, curve)
-  RP-->>POL: premium
-  Buyer->>RP: transfer premium (USDC SAC)
-  RP->>RP: account premium to season, apply fee caps
-  POL->>POL: mint certificate, state = active
+  Buyer->>POL: mint(pool, season, terms, max_premium, metadata)
+  POL->>RP: premium_for(pool_id, coverage)
+  RP-->>POL: premium (linear curve, rounded up)
+  POL->>POL: premium <= max_premium? else QuoteMismatch
+  POL->>RP: collect_premium(pool_id, season_id, buyer, premium)
+  RP->>RP: apply fee caps, credit net to season and reserves
+  RP-->>POL: net reserved
+  POL->>POL: mint certificate, state = Active, store metadata pointer
   POL-->>Buyer: policy_id, event PolicyMinted
 ```
 
-Premium custody lands in `risk-pool` before the certificate is marked active, so a policy never exists without its premium collected. Batch purchase (FR-POL-4) repeats the inner steps within instruction limits and is resumable on partial failure.
+Premium custody lands in `risk-pool` before the certificate is marked active, so a policy never exists without its premium collected. The premium curve is a provisional linear model (`premium_for`, DR-0022), rounded up so integer truncation never underprices the pool. `policy` holds no value: it quotes and purchases against `risk-pool` over a cross contract client, and a cancellation before the coverage window opens refunds only the reserved net (fees are not reversed). Batch purchase (FR-POL-4) repeats the inner steps within instruction limits and is resumable on partial failure.
 
 ### 4.2 Observation to payout
 
@@ -132,6 +132,7 @@ Key naming: a `#[contracttype]` enum named `DataKey` per contract, variants in `
 | Key | Value | Durability | Notes |
 |---|---|---|---|
 | `Admin` | guardian config reference | Instance | Multisig address set at init |
+| `PolicyContract` | policy contract address | Instance | Authorized caller of `refund_premium`; set by guardian via `set_policy_contract` |
 | `PoolCount` | u64 | Instance | Monotonic pool id source; ids start at 1 |
 | `SeasonCount(pool_id)` | u64 | Persistent | Monotonic season id source per pool; ids start at 1 |
 | `PoolConfig(pool_id)` | token, region list, season length, premium curve params, tranche config, fee schedule, transferability default | Persistent | Immutable fields fixed at creation; parameter fields change only via timelock |
@@ -146,9 +147,10 @@ Key naming: a `#[contracttype]` enum named `DataKey` per contract, variants in `
 | Key | Value | Durability | Notes |
 |---|---|---|---|
 | `Admin` | guardian config reference | Instance | |
+| `RiskPool` | risk-pool contract address | Instance | The pool policies quote and purchase against; set at init |
 | `PolicyCounter` | u64 | Instance | Monotonic policy id source |
-| `Policy(policy_id)` | owner, pool_id, season_id, region, coverage, index_ref, window, severity_curve, state | Persistent | State: Active, Triggered, Paid, Expired, Cancelled |
-| `MetaPointer(policy_id)` | opaque off chain reference | Persistent | No PII on chain (NFR-PRIV-1) |
+| `Policy(policy_id)` | owner, pool_id, season_id, region, coverage, index_ref, window_start, window_end, severity_curve, premium_paid, net_reserved, state | Persistent | State: Active, Triggered, Paid, Expired, Cancelled. `premium_paid` is gross; `net_reserved` (gross minus fees) is what a cancellation refunds |
+| `MetaPointer(policy_id)` | opaque off chain reference (`BytesN<32>`) | Persistent | Content hash or URI digest; no PII on chain (NFR-PRIV-1) |
 | `Transferable(pool_id)` | bool | Persistent | Default false (FR-POL-6) |
 
 ### 5.3 oracle-adapter
@@ -189,7 +191,7 @@ Every contract defines exactly one `#[contracterror]` enum. Error codes are numb
 | Contract | Code range | Example variants |
 |---|---|---|
 | `risk-pool` | 100 to 199 | `PoolNotFound` (100), `InsufficientReserves` (101), `SolvencyViolated` (102), `SeasonNotOpen` (103), `TrancheWithdrawBlocked` (104), `FeeCapExceeded` (105), `InvalidConfig` (106), `InvalidAmount` (107), `InsufficientReceipts` (108), `TrancheCapExceeded` (109), `InvalidSeasonState` (110), `SeasonNotFound` (111) |
-| `policy` | 200 to 299 | `PolicyNotFound` (200), `InvalidState` (201), `WindowStarted` (202), `NotTransferable` (203), `QuoteMismatch` (204) |
+| `policy` | 200 to 299 | `PolicyNotFound` (200), `InvalidState` (201), `WindowStarted` (202), `NotTransferable` (203), `QuoteMismatch` (204), `InvalidCoverage` (205), `InvalidWindow` (206), `NotExpired` (207) |
 | `oracle-adapter` | 300 to 399 | `UnknownPublisher` (300), `BadSignature` (301), `ObservationStale` (302), `Challenged` (303), `RegistryTimelock` (304) |
 | `trigger-engine` | 400 to 499 | `IndexNotFound` (400), `StaleIndex` (401), `AlreadyFinalized` (402), `NotTriggered` (403), `NonDeterministicInput` (404) |
 | `payout-vault` | 500 to 599 | `Paused` (500), `BatchComplete` (501), `NoFinalizedTrigger` (502), `PayoutExists` (503) |

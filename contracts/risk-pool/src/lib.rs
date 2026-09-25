@@ -14,11 +14,16 @@
 //!
 //! Requirements: FR-POOL-1 to 7, FR-ACC-1, FR-ACC-3.
 
-use common::{apply_bps, extend_instance_ttl, extend_persistent_ttl};
+use common::{apply_bps, extend_instance_ttl, extend_persistent_ttl, BPS_DENOMINATOR};
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, token, Address, Env,
     Symbol, Vec,
 };
+
+/// One whole unit of coverage in the settlement token's smallest denomination
+/// (1 USDC at 7 decimals). The premium curve's slope is applied per whole unit
+/// of coverage, so a pool prices in cents without fractional rounding surprises.
+const COVERAGE_UNIT: i128 = 10_000_000;
 
 /// Capital tranche seniority. Junior absorbs losses first and earns more; the
 /// senior tranche is paid down first on withdrawal.
@@ -148,6 +153,8 @@ pub struct TreasuryState {
 pub enum DataKey {
     /// Guardian multisig configuration reference. Instance durability.
     Admin,
+    /// Policy contract permitted to request premium refunds. Instance durability.
+    PolicyContract,
     /// Monotonic counter for allocating pool ids. Instance durability.
     PoolCount,
     /// Monotonic counter for allocating season ids within a pool.
@@ -259,6 +266,16 @@ pub struct SeasonSettled {
     pub net: i128,
 }
 
+/// Emitted when a premium is refunded to a cancelled policy. Topic
+/// `premium_refunded`; data is the pool, season, recipient, and net returned.
+#[contractevent(topics = ["premium_refunded"], data_format = "map")]
+pub struct PremiumRefunded {
+    pub pool_id: u64,
+    pub season_id: u64,
+    pub to: Address,
+    pub net: i128,
+}
+
 #[contract]
 pub struct RiskPool;
 
@@ -278,6 +295,27 @@ impl RiskPool {
         env.storage()
             .instance()
             .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)
+    }
+
+    /// Configure the policy contract permitted to request premium refunds
+    /// (cancellation path, ARCHITECTURE section 7). Guardian only. Set once the
+    /// policy contract is deployed; `refund_premium` authorizes no other caller.
+    pub fn set_policy_contract(env: Env, policy: Address) -> Result<(), Error> {
+        require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::PolicyContract, &policy);
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Read the configured policy contract address, or `NotInitialized` (902)
+    /// if none has been set.
+    pub fn policy_contract(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::PolicyContract)
             .ok_or(Error::NotInitialized)
     }
 
@@ -527,6 +565,19 @@ impl RiskPool {
         read_solvency(&env, pool_id)
     }
 
+    /// Quote the gross premium for a coverage amount under a pool's curve
+    /// (pricing path; ARCHITECTURE section 4.2 sequence). This is a pure read:
+    /// it derives the price from the pool's stored `PremiumParams` and touches
+    /// no season or solvency state, so the policy contract can call it cross
+    /// contract before it mints a policy. Returns the gross premium in the pool
+    /// token's smallest unit. Rejects a missing pool with `PoolNotFound` (100)
+    /// and non positive coverage with `InvalidAmount` (107). The premium model
+    /// is provisional (DR-0022).
+    pub fn premium_for(env: Env, pool_id: u64, coverage: i128) -> Result<i128, Error> {
+        let config = read_config(&env, pool_id)?;
+        compute_premium(&config.premium, coverage)
+    }
+
     /// Open a new season for a pool (FR-POOL-6). Guardian only. Allocates a
     /// season id, derives the coverage window from the pool's season length,
     /// and starts the season in `Open`. Returns the new season id.
@@ -669,6 +720,68 @@ impl RiskPool {
         Ok(net)
     }
 
+    /// Refund the net premium of a cancelled policy (cancellation path). Callable
+    /// only by the configured policy contract (`set_policy_contract`), which
+    /// authorizes itself in the cross contract call. Reverses `net` from the
+    /// season's `premiums_in` and from solvency reserves, then returns the
+    /// underlying to `to`. Fees already swept to the treasury are not reversed:
+    /// only the reserve portion a policy contributed is refundable. Accepted
+    /// only while the season is `Open` or `Active` (else `SeasonNotOpen`, 103),
+    /// and rejected if it would break the solvency invariant `reserves >=
+    /// committed` (`SolvencyViolated`, 102) or exceed available reserves
+    /// (`InsufficientReserves`, 101). Returns the refunded amount.
+    pub fn refund_premium(
+        env: Env,
+        pool_id: u64,
+        season_id: u64,
+        to: Address,
+        net: i128,
+    ) -> Result<i128, Error> {
+        require_policy_contract(&env)?;
+        if net <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let config = read_config(&env, pool_id)?;
+        let mut season = read_season(&env, pool_id, season_id)?;
+        if season.state != SeasonState::Open && season.state != SeasonState::Active {
+            return Err(Error::SeasonNotOpen);
+        }
+        if net > season.premiums_in {
+            return Err(Error::InvalidAmount);
+        }
+
+        let mut solvency = read_solvency(&env, pool_id)?;
+        if net > solvency.reserves {
+            return Err(Error::InsufficientReserves);
+        }
+        let new_reserves = solvency.reserves.checked_sub(net).ok_or(Error::Overflow)?;
+        if new_reserves < solvency.committed {
+            return Err(Error::SolvencyViolated);
+        }
+
+        season.premiums_in = season.premiums_in.checked_sub(net).ok_or(Error::Overflow)?;
+        write_persistent(&env, &DataKey::Season(pool_id, season_id), &season);
+
+        solvency.reserves = new_reserves;
+        write_persistent(&env, &DataKey::Solvency(pool_id), &solvency);
+
+        token::TokenClient::new(&env, &config.token).transfer(
+            &env.current_contract_address(),
+            &to,
+            &net,
+        );
+
+        extend_instance_ttl(&env);
+        PremiumRefunded {
+            pool_id,
+            season_id,
+            to,
+            net,
+        }
+        .publish(&env);
+        Ok(net)
+    }
+
     /// Settle a `Closed` season (FR-POOL-6, settlement waterfall). Guardian
     /// only. A surplus (net premiums over payouts) is credited to the junior
     /// tranche as residual yield; a loss is absorbed by junior capital first
@@ -781,6 +894,19 @@ fn require_admin(env: &Env) -> Result<(), Error> {
     Ok(())
 }
 
+/// Read the configured policy contract and require its authorization. Fails
+/// with `Unauthorized` (900) if no policy contract has been configured, so a
+/// refund can never be authorized before governance wires the two contracts.
+fn require_policy_contract(env: &Env) -> Result<Address, Error> {
+    let policy: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::PolicyContract)
+        .ok_or(Error::Unauthorized)?;
+    policy.require_auth();
+    Ok(policy)
+}
+
 /// Apply a forward season transition. Guardian only. Rejects a season whose
 /// current state is not `from` with `InvalidSeasonState` (110).
 fn transition_season(
@@ -860,6 +986,32 @@ fn absorb_loss(env: &Env, pool_id: u64, loss: i128) -> Result<(), Error> {
 /// overflow or division by zero so callers map it to `Overflow` (903).
 fn mul_div(a: i128, b: i128, denom: i128) -> Option<i128> {
     a.checked_mul(b).and_then(|p| p.checked_div(denom))
+}
+
+/// Evaluate the provisional premium curve for a coverage amount (DR-0022). The
+/// marginal rate rises with coverage:
+/// `rate_bps = base_bps + coverage_slope_bps * floor(coverage / COVERAGE_UNIT)`,
+/// and the gross premium is `ceil(coverage * rate_bps / BPS_DENOMINATOR)`.
+/// Rounding is always up so the pool never underprices a policy by a
+/// sub-unit remainder. All arithmetic is i128 checked; failures map to
+/// `Overflow` (903). Non positive coverage is rejected with `InvalidAmount`
+/// (107).
+fn compute_premium(premium: &PremiumParams, coverage: i128) -> Result<i128, Error> {
+    if coverage <= 0 {
+        return Err(Error::InvalidAmount);
+    }
+    let units = coverage / COVERAGE_UNIT;
+    let slope_component = i128::from(premium.coverage_slope_bps)
+        .checked_mul(units)
+        .ok_or(Error::Overflow)?;
+    let rate_bps = i128::from(premium.base_bps)
+        .checked_add(slope_component)
+        .ok_or(Error::Overflow)?;
+    coverage
+        .checked_mul(rate_bps)
+        .and_then(|n| n.checked_add(BPS_DENOMINATOR - 1))
+        .and_then(|n| n.checked_div(BPS_DENOMINATOR))
+        .ok_or(Error::Overflow)
 }
 
 mod test;

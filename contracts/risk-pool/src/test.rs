@@ -574,3 +574,122 @@ fn settle_absorbs_loss_junior_first_then_senior() {
         );
     }
 }
+
+// ----- Sprint 1.4: premium quote and cancellation refund -----
+
+#[test]
+fn premium_for_follows_the_curve() {
+    // setup_pool uses base_bps = 100 (1 percent) and coverage_slope_bps = 10.
+    let (env, contract_id, _token, pool_id, _depositor) = setup_pool(0);
+    let client = RiskPoolClient::new(&env, &contract_id);
+
+    // One whole coverage unit (10_000_000): units = 1, rate = 100 + 10 = 110 bps,
+    // premium = 10_000_000 * 110 / 10_000 = 110_000.
+    assert_eq!(client.premium_for(&pool_id, &10_000_000), 110_000);
+    // Half a unit: units = 0, rate = 100 bps, premium = 5_000_000 / 100 = 50_000.
+    assert_eq!(client.premium_for(&pool_id, &5_000_000), 50_000);
+}
+
+#[test]
+fn premium_for_rounds_up_to_favor_the_pool() {
+    let (env, contract_id, _token, pool_id, _depositor) = setup_pool(0);
+    let client = RiskPoolClient::new(&env, &contract_id);
+    // 1 unit of coverage at 100 bps is 0.01, which must round up to 1 rather
+    // than truncate to 0 so the pool never underprices by a remainder.
+    assert_eq!(client.premium_for(&pool_id, &1), 1);
+}
+
+#[test]
+fn premium_for_rejects_bad_inputs() {
+    let (env, contract_id, _token, pool_id, _depositor) = setup_pool(0);
+    let client = RiskPoolClient::new(&env, &contract_id);
+    assert_eq!(
+        client.try_premium_for(&pool_id, &0),
+        Err(Ok(Error::InvalidAmount))
+    );
+    assert_eq!(
+        client.try_premium_for(&999, &10_000_000),
+        Err(Ok(Error::PoolNotFound))
+    );
+}
+
+// Open and activate a season, then collect `premium` into it (no fees), leaving
+// the season Active with reserves and premiums_in equal to the net collected.
+fn setup_active_season_with_premium(premium: i128) -> (Env, Address, Address, u64, u64, Address) {
+    let (env, contract_id, token, pool_id, payer) = setup_pool_with_fees(0, 0, 0, 0);
+    let client = RiskPoolClient::new(&env, &contract_id);
+    let season_id = client.open_season(&pool_id);
+    client.activate_season(&pool_id, &season_id);
+    client.collect_premium(&pool_id, &season_id, &payer, &premium);
+    (env, contract_id, token, pool_id, season_id, payer)
+}
+
+#[test]
+fn refund_premium_reverses_reserves_and_pays_out() {
+    let (env, contract_id, token, pool_id, season_id, _payer) =
+        setup_active_season_with_premium(300);
+    let client = RiskPoolClient::new(&env, &contract_id);
+    let token_client = token::TokenClient::new(&env, &token);
+
+    let policy = random_address(&env);
+    client.set_policy_contract(&policy);
+    let holder = random_address(&env);
+
+    let refunded = client.refund_premium(&pool_id, &season_id, &holder, &100);
+    assert_eq!(refunded, 100);
+    assert_eq!(client.season(&pool_id, &season_id).premiums_in, 200);
+    assert_eq!(client.solvency(&pool_id).reserves, 200);
+    // The underlying left the contract for the holder.
+    assert_eq!(token_client.balance(&holder), 100);
+    assert_eq!(token_client.balance(&contract_id), 200);
+}
+
+#[test]
+fn refund_premium_requires_configured_policy_contract() {
+    let (env, contract_id, _token, pool_id, season_id, _payer) =
+        setup_active_season_with_premium(300);
+    let client = RiskPoolClient::new(&env, &contract_id);
+    let holder = random_address(&env);
+    // No policy contract configured: no caller may request a refund.
+    assert_eq!(
+        client.try_refund_premium(&pool_id, &season_id, &holder, &100),
+        Err(Ok(Error::Unauthorized))
+    );
+}
+
+#[test]
+fn refund_premium_guards_solvency_and_amount() {
+    let (env, contract_id, _token, pool_id, season_id, _payer) =
+        setup_active_season_with_premium(300);
+    let client = RiskPoolClient::new(&env, &contract_id);
+    let policy = random_address(&env);
+    client.set_policy_contract(&policy);
+    let holder = random_address(&env);
+
+    // Cannot refund more net than the season took in.
+    assert_eq!(
+        client.try_refund_premium(&pool_id, &season_id, &holder, &400),
+        Err(Ok(Error::InvalidAmount))
+    );
+    // With the full 300 committed to payouts, any refund breaks solvency.
+    set_committed(&env, &contract_id, pool_id, 300);
+    assert_eq!(
+        client.try_refund_premium(&pool_id, &season_id, &holder, &100),
+        Err(Ok(Error::SolvencyViolated))
+    );
+}
+
+#[test]
+fn refund_premium_rejected_after_season_closes() {
+    let (env, contract_id, _token, pool_id, season_id, _payer) =
+        setup_active_season_with_premium(300);
+    let client = RiskPoolClient::new(&env, &contract_id);
+    let policy = random_address(&env);
+    client.set_policy_contract(&policy);
+    client.close_season(&pool_id, &season_id);
+    let holder = random_address(&env);
+    assert_eq!(
+        client.try_refund_premium(&pool_id, &season_id, &holder, &100),
+        Err(Ok(Error::SeasonNotOpen))
+    );
+}
