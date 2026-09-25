@@ -133,11 +133,12 @@ Key naming: a `#[contracttype]` enum named `DataKey` per contract, variants in `
 |---|---|---|---|
 | `Admin` | guardian config reference | Instance | Multisig address set at init |
 | `PoolCount` | u64 | Instance | Monotonic pool id source; ids start at 1 |
-| `PoolConfig(pool_id)` | token, region list, season length, premium curve params, tranche config, transferability default | Persistent | Immutable fields fixed at creation; parameter fields change only via timelock |
+| `SeasonCount(pool_id)` | u64 | Persistent | Monotonic season id source per pool; ids start at 1 |
+| `PoolConfig(pool_id)` | token, region list, season length, premium curve params, tranche config, fee schedule, transferability default | Persistent | Immutable fields fixed at creation; parameter fields change only via timelock |
 | `Tranche(pool_id, tier)` | deposited amount, receipt supply | Persistent | `tier` is Junior or Senior |
 | `Receipt(pool_id, tier, holder)` | balance | Persistent | Pro rata claim on the tranche; internal ledger, not a token (DR-0020) |
-| `Season(pool_id, season_id)` | state, opened_at, closes_at, premiums_in, payouts_committed, payouts_paid | Persistent | State machine in section 4 and 6 |
-| `Treasury(pool_id)` | protocol fees, publisher fees accrued | Persistent | Caps enforced from `PoolConfig` |
+| `Season(pool_id, season_id)` | state, opened_at, closes_at, premiums_in, payouts_committed, payouts_paid | Persistent | Lifecycle `Open -> Active -> Closed -> Settled`; `premiums_in` is net of fees |
+| `Treasury(pool_id)` | protocol fees, publisher fees accrued | Persistent | Caps (`FeeConfig`) enforced on accrual in `collect_premium` |
 | `Solvency(pool_id)` | reserves, committed | Persistent | Invariant: `reserves >= committed` at end of every mutating call |
 
 ### 5.2 policy
@@ -187,7 +188,7 @@ Every contract defines exactly one `#[contracterror]` enum. Error codes are numb
 
 | Contract | Code range | Example variants |
 |---|---|---|
-| `risk-pool` | 100 to 199 | `PoolNotFound` (100), `InsufficientReserves` (101), `SolvencyViolated` (102), `SeasonNotOpen` (103), `TrancheWithdrawBlocked` (104), `FeeCapExceeded` (105), `InvalidConfig` (106), `InvalidAmount` (107), `InsufficientReceipts` (108), `TrancheCapExceeded` (109) |
+| `risk-pool` | 100 to 199 | `PoolNotFound` (100), `InsufficientReserves` (101), `SolvencyViolated` (102), `SeasonNotOpen` (103), `TrancheWithdrawBlocked` (104), `FeeCapExceeded` (105), `InvalidConfig` (106), `InvalidAmount` (107), `InsufficientReceipts` (108), `TrancheCapExceeded` (109), `InvalidSeasonState` (110), `SeasonNotFound` (111) |
 | `policy` | 200 to 299 | `PolicyNotFound` (200), `InvalidState` (201), `WindowStarted` (202), `NotTransferable` (203), `QuoteMismatch` (204) |
 | `oracle-adapter` | 300 to 399 | `UnknownPublisher` (300), `BadSignature` (301), `ObservationStale` (302), `Challenged` (303), `RegistryTimelock` (304) |
 | `trigger-engine` | 400 to 499 | `IndexNotFound` (400), `StaleIndex` (401), `AlreadyFinalized` (402), `NotTriggered` (403), `NonDeterministicInput` (404) |
