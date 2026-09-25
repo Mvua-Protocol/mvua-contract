@@ -14,10 +14,11 @@ ignore = [
 
 [licenses]
 version = 2
-# Unicode-DFS-2016 is required by unicode-ident, licensed
-# "(MIT OR Apache-2.0) AND Unicode-DFS-2016". It is a permissive data license
-# for Unicode tables, not copyleft.
-allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Unicode-3.0", "Unicode-DFS-2016"]
+# Unicode-3.0 is required by unicode-ident (permissive data license for Unicode
+# tables, not copyleft). "Apache-2.0 WITH LLVM-exception" is required by wasmparser
+# and wasmparser-nostd via the soroban wasmi stack; the LLVM exception only relaxes
+# Apache-2.0's attribution requirement when linking, so it is strictly more permissive.
+allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-3-Clause", "Unicode-3.0"]
 
 [bans]
 multiple-versions = "warn"
