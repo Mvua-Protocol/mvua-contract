@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Architecture document (`docs/ARCHITECTURE.md`): module map, key flows, storage layout per contract, error model with per contract code ranges, authorization model, and upgrade pattern.
+- Threat model (`docs/THREAT-MODEL.md`): assets, trust boundaries, adversary list, and twenty threats with mitigations mapped to requirement IDs.
+- Index definition specification (`docs/INDEX-SPEC.md`): rainfall shortfall and consecutive dry days formulas with integer math, severity curve, staleness rules, and golden test vectors.
+- Upgrade and governance specification (`docs/UPGRADE-GOVERNANCE.md`): guardian multisig responsibilities, timelock flow, and per contract migration procedures.
+
 ## [0.1.0] - 2026-09-12
 
 ### Added
