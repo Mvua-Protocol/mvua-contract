@@ -1,0 +1,19 @@
+[package]
+name = "oracle-adapter"
+description = "Publisher registry, signed observation ingestion, median aggregation, and staleness."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+common = { path = "../common" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+test-utils = { path = "../test-utils" }
