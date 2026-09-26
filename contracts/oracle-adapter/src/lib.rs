@@ -228,11 +228,7 @@ impl OracleAdapter {
     /// removal. Rejects a no-op (`PublisherExists` 305 to add an active key,
     /// `UnknownPublisher` 300 to remove an unknown one) and a second concurrent
     /// proposal for the same key (`PendingExists` 307). Returns the eta.
-    pub fn propose_publisher(
-        env: Env,
-        publisher: BytesN<32>,
-        add: bool,
-    ) -> Result<u64, Error> {
+    pub fn propose_publisher(env: Env, publisher: BytesN<32>, add: bool) -> Result<u64, Error> {
         require_admin(&env)?;
         if read_pending(&env, &publisher).is_some() {
             return Err(Error::PendingExists);
@@ -365,14 +361,20 @@ impl OracleAdapter {
                 accepted: true,
             },
         );
-        env.storage()
-            .persistent()
-            .remove(&DataKey::Challenge(region.clone(), metric.clone(), slot));
+        env.storage().persistent().remove(&DataKey::Challenge(
+            region.clone(),
+            metric.clone(),
+            slot,
+        ));
         head.next_seq = head.next_seq.checked_add(1).ok_or(Error::Overflow)?;
         if head.count < RING_SIZE {
             head.count += 1;
         }
-        write_persistent(&env, &DataKey::ObsHead(region.clone(), metric.clone()), &head);
+        write_persistent(
+            &env,
+            &DataKey::ObsHead(region.clone(), metric.clone()),
+            &head,
+        );
         extend_instance_ttl(&env);
         ObservationSubmitted {
             region,
@@ -420,12 +422,7 @@ impl OracleAdapter {
     /// Clear a challenge flag (FR-ORC-5). Guardian only. `NoPendingChange` is
     /// not reused here: clearing an unflagged slot is a no-op that still emits,
     /// so a guardian retry is idempotent.
-    pub fn unchallenge(
-        env: Env,
-        region: Symbol,
-        metric: Symbol,
-        seq: u32,
-    ) -> Result<(), Error> {
+    pub fn unchallenge(env: Env, region: Symbol, metric: Symbol, seq: u32) -> Result<(), Error> {
         require_admin(&env)?;
         env.storage()
             .persistent()
@@ -481,7 +478,9 @@ impl OracleAdapter {
         if len % 2 == 1 {
             Ok(values[mid])
         } else {
-            let sum = values[mid - 1].checked_add(values[mid]).ok_or(Error::Overflow)?;
+            let sum = values[mid - 1]
+                .checked_add(values[mid])
+                .ok_or(Error::Overflow)?;
             Ok(sum / 2)
         }
     }
@@ -499,10 +498,7 @@ impl OracleAdapter {
     }
 
     /// Read a pending registry change, or `NoPendingChange` (306).
-    pub fn pending_publisher(
-        env: Env,
-        publisher: BytesN<32>,
-    ) -> Result<PendingRegistry, Error> {
+    pub fn pending_publisher(env: Env, publisher: BytesN<32>) -> Result<PendingRegistry, Error> {
         read_pending(&env, &publisher).ok_or(Error::NoPendingChange)
     }
 
@@ -530,7 +526,6 @@ impl OracleAdapter {
     pub fn staleness_bound(env: Env) -> u64 {
         read_staleness_hours(&env)
     }
-
 }
 
 /// Persist a value under `key` and extend its TTL in one step.
@@ -623,6 +618,3 @@ fn sort_ascending(values: &mut [i128; RING_SIZE as usize], len: usize) {
 }
 
 mod test;
-
-
-
