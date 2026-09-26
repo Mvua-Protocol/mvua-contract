@@ -158,12 +158,13 @@ Key naming: a `#[contracttype]` enum named `DataKey` per contract, variants in `
 | Key | Value | Durability | Notes |
 |---|---|---|---|
 | `Admin` | guardian config reference | Instance | Registry changes are timelocked (FR-ORC-1) |
-| `Publisher(pubkey)` | ed25519 public key, active flag, added_at | Persistent | Rotation and removal via timelocked admin |
-| `Obs(region, metric, seq)` | value, timestamp, publisher, accepted flag | Persistent | Append only ring of the last N per region and metric |
-| `ObsHead(region, metric)` | latest seq, count | Persistent | Supports median over last N |
-| `Challenge(region, metric, seq)` | flagged by, reason code | Persistent | Set by guardians in the challenge window |
-| `PublisherFee(pubkey)` | accrued | Persistent | Per accepted observation window (FR-ORC-6) |
-| `StalenessBound` | hours | Instance | Fail safe threshold (FR-ORC-4) |
+| `Publisher(pubkey)` | active flag, added_at | Persistent | Rotation and removal via timelocked admin; a removal deactivates rather than deletes so observation history keeps a resolvable author |
+| `PendingPublisher(pubkey)` | add flag, eta | Persistent | A proposed add or remove awaiting its registry timelock (provisional 7 days); cancellable before eta |
+| `Obs(region, metric, seq)` | value, timestamp, publisher, accepted flag | Persistent | Append only ring of the last N (RING_SIZE = 16) per region and metric; slot is `next_seq % N` |
+| `ObsHead(region, metric)` | next_seq, count | Persistent | Ring cursor; supports median over the last N |
+| `Challenge(region, metric, seq)` | reason code | Persistent | Set by guardians to exclude a slot from the median; cleared on slot reuse |
+| `PublisherFee(pubkey)` | accrued | Persistent | Reserved for the fee ledger (FR-ORC-6, P1.6.5); unused in Sprint 1.6 |
+| `StalenessBound` | hours | Instance | Fail safe threshold, default 48 (FR-ORC-4) |
 
 ### 5.4 trigger-engine
 
@@ -192,7 +193,7 @@ Every contract defines exactly one `#[contracterror]` enum. Error codes are numb
 |---|---|---|
 | `risk-pool` | 100 to 199 | `PoolNotFound` (100), `InsufficientReserves` (101), `SolvencyViolated` (102), `SeasonNotOpen` (103), `TrancheWithdrawBlocked` (104), `FeeCapExceeded` (105), `InvalidConfig` (106), `InvalidAmount` (107), `InsufficientReceipts` (108), `TrancheCapExceeded` (109), `InvalidSeasonState` (110), `SeasonNotFound` (111) |
 | `policy` | 200 to 299 | `PolicyNotFound` (200), `InvalidState` (201), `WindowStarted` (202), `NotTransferable` (203), `QuoteMismatch` (204), `InvalidCoverage` (205), `InvalidWindow` (206), `NotExpired` (207), `InvalidBatch` (208) |
-| `oracle-adapter` | 300 to 399 | `UnknownPublisher` (300), `BadSignature` (301), `ObservationStale` (302), `Challenged` (303), `RegistryTimelock` (304) |
+| `oracle-adapter` | 300 to 399 | `UnknownPublisher` (300), `BadSignature` (301), `ObservationStale` (302), `Challenged` (303), `RegistryTimelock` (304), `PublisherExists` (305), `NoPendingChange` (306), `PendingExists` (307), `InvalidObservation` (308) |
 | `trigger-engine` | 400 to 499 | `IndexNotFound` (400), `StaleIndex` (401), `AlreadyFinalized` (402), `NotTriggered` (403), `NonDeterministicInput` (404) |
 | `payout-vault` | 500 to 599 | `Paused` (500), `BatchComplete` (501), `NoFinalizedTrigger` (502), `PayoutExists` (503) |
 | shared or auth | 900 to 999 | `Unauthorized` (900), `TimelockPending` (901), `NotInitialized` (902), `Overflow` (903) |

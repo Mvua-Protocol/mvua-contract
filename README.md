@@ -74,7 +74,7 @@ The workspace is a set of focused Soroban contract crates plus shared support cr
 | `common` | Shared error codes, value types, basis point math, and storage TTL helpers | shared, in use |
 | `risk-pool` | Pool creation, tranches, premiums, season lifecycle, settlement | **implemented** (see below) |
 | `policy` | Policy certificates and lifecycle | **implemented** (see below) |
-| `oracle-adapter` | Publisher registry, ed25519 signed observations, median aggregation | scaffolded |
+| `oracle-adapter` | Publisher registry, ed25519 signed observations, median aggregation | **implemented** (see below) |
 | `trigger-engine` | Index definitions and deterministic evaluation | scaffolded |
 | `payout-vault` | Resumable batch payouts to claimable balances, pause | scaffolded |
 | `test-utils` | Shared test fixtures, scenario builders, mock publishers | shared, in use |
@@ -105,6 +105,18 @@ The policy contract is the buyer facing certificate and its lifecycle. It holds 
 - **Transferability**: transfers are off by default per pool. A guardian may enable them with `set_transferable`, after which the owner of an `Active` policy may `transfer` it; a triggered, paid, or expired policy cannot change hands.
 
 The premium curve is a documented placeholder pending calibration against the index model (private planning repo, DR-0022).
+
+### oracle-adapter: what is implemented
+
+The oracle adapter is the protocol's trust boundary for external weather data. The trigger engine will consume only the trusted median it produces, never a raw observation.
+
+- **Publisher registry**: `propose_publisher`, `execute_publisher`, and `cancel_publisher` add or remove a publisher's ed25519 key behind a timelock, so guardians have a cancellation window against a compromised key. A removal deactivates the key rather than deleting it, so past observations keep a resolvable author.
+- **Signed ingestion**: `submit` authenticates an observation by verifying an ed25519 signature over the observation payload, not by a Stellar account signature, so a weather station never needs an on chain account. A negative value or a future timestamp is rejected, and a forged signature fails verification.
+- **Trusted median**: `median` returns the median over accepted, unchallenged, and fresh observations, but only when at least two distinct publishers are represented and the data is within the staleness bound (default 48 hours). Otherwise it reports the index as stale, so a payout can only fire on data that is both fresh and corroborated.
+- **Challenge**: guardians may `challenge` and `unchallenge` a stored observation to exclude it from the median.
+- **Reads**: `is_publisher`, `publisher_info`, `pending_publisher`, `observation`, `head`, `is_challenged`, and `staleness_bound` expose state for the app and indexer.
+
+The ring size, minimum publisher count, staleness bound, and registry timelock are provisional and governance tunable, pending calibration on testnet (private planning repo, DR-0024).
 
 <!-- PLACEHOLDER_TAIL -->
 
