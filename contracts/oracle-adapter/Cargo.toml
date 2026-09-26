@@ -18,3 +18,7 @@ common = { path = "../common" }
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 test-utils = { path = "../test-utils" }
+# Signs the observation payloads in tests so `submit` exercises a real ed25519
+# verification. Pinned to match the workspace resolution (DR-0019); dev only,
+# never linked into the deployed contract (DR-0024).
+ed25519-dalek = "=2.2.0"
