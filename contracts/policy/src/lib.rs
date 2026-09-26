@@ -8,14 +8,16 @@
 //! minting with premium collection (FR-POL-1), the lifecycle state machine
 //! (FR-POL-1), owner cancellation with a premium refund before the coverage
 //! window opens (FR-POL-3), and an opaque off chain metadata pointer that keeps
-//! PII off chain (FR-POL-4, NFR-PRIV-1).
+//! PII off chain (FR-POL-4, NFR-PRIV-1). Sprint 1.5 adds cooperative batch
+//! purchase (`mint_batch`, FR-POL-4) and pool level transferability with an owner
+//! `transfer` (FR-POL-6).
 //!
 //! Requirements: FR-POL-1 to 6.
 
 use common::{extend_instance_ttl, extend_persistent_ttl};
 use soroban_sdk::{
     contract, contractclient, contracterror, contractevent, contractimpl, contracttype, Address,
-    BytesN, Env, Symbol,
+    BytesN, Env, Symbol, Vec,
 };
 
 /// Cross contract client for risk-pool (the subset policy calls). Declared as a
@@ -79,6 +81,25 @@ pub struct PolicyTerms {
     pub severity_curve: u32,
 }
 
+/// One line item in a cooperative batch purchase (FR-POL-4). Each entry names
+/// its own policy `owner` (the covered farmer) and per policy `max_premium` and
+/// `metadata`, while a single payer funds the whole batch in `mint_batch`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchEntry {
+    pub owner: Address,
+    pub terms: PolicyTerms,
+    pub max_premium: i128,
+    pub metadata: BytesN<32>,
+}
+
+/// Maximum policies mintable in a single `mint_batch` call. Chosen
+/// conservatively so a batch's cross contract quotes and premium collections
+/// stay within Soroban's per transaction instruction budget; a cooperative with
+/// more members splits into several atomic calls (DR-0023). Provisional and
+/// tunable once measured on testnet.
+const MAX_BATCH: u32 = 20;
+
 /// Authoritative storage layout (`docs/ARCHITECTURE.md` section 5.2). Adding or
 /// changing a key updates that table in the same pull request.
 #[contracttype]
@@ -113,6 +134,7 @@ pub enum Error {
     InvalidCoverage = 205,
     InvalidWindow = 206,
     NotExpired = 207,
+    InvalidBatch = 208,
     Unauthorized = 900,
     NotInitialized = 902,
     Overflow = 903,
@@ -144,6 +166,33 @@ pub struct PolicyCancelled {
     pub policy_id: u64,
     pub owner: Address,
     pub refunded: i128,
+}
+
+/// Emitted once per `mint_batch` call summarizing the cooperative purchase. Topic
+/// `batch_minted`; data is the payer, pool, season, and number of policies minted.
+#[contractevent(topics = ["batch_minted"], data_format = "map")]
+pub struct BatchMinted {
+    pub payer: Address,
+    pub pool_id: u64,
+    pub season_id: u64,
+    pub count: u32,
+}
+
+/// Emitted when a policy changes owner (FR-POL-6). Topic `policy_transfer`; data
+/// is the policy id and the previous and new owner.
+#[contractevent(topics = ["policy_transfer"], data_format = "map")]
+pub struct PolicyTransferred {
+    pub policy_id: u64,
+    pub from: Address,
+    pub to: Address,
+}
+
+/// Emitted when a pool's transferability flag is set (FR-POL-6). Topic
+/// `transferable`; data is the pool id and whether transfers are allowed.
+#[contractevent(topics = ["transferable"], data_format = "map")]
+pub struct TransferabilitySet {
+    pub pool_id: u64,
+    pub allowed: bool,
 }
 
 #[contract]
@@ -199,68 +248,74 @@ impl Policy {
         metadata: BytesN<32>,
     ) -> Result<u64, Error> {
         buyer.require_auth();
-        let PolicyTerms {
-            region,
-            coverage,
-            index_ref,
-            window_start,
-            window_end,
-            severity_curve,
-        } = terms;
-        if coverage <= 0 {
-            return Err(Error::InvalidCoverage);
-        }
-        if window_end <= window_start {
-            return Err(Error::InvalidWindow);
+        let rp = read_risk_pool(&env)?;
+        let client = RiskPoolClient::new(&env, &rp);
+        mint_one(
+            &env,
+            &client,
+            buyer.clone(),
+            &buyer,
+            pool_id,
+            season_id,
+            terms,
+            max_premium,
+            metadata,
+        )
+    }
+
+    /// Mint a batch of policies for a cooperative in one call (FR-POL-4). The
+    /// `payer` authorizes and funds every entry; each entry carries its own
+    /// `owner` (the covered farmer), terms, `max_premium`, and metadata. The
+    /// batch is atomic: any entry that fails (bad terms, `QuoteMismatch`, or a
+    /// pool side trap) reverts the whole call, so a cooperative simply retries
+    /// the remaining members. `entries` must be non empty and at most
+    /// `MAX_BATCH` long, else `InvalidBatch` (208). Returns the new policy ids
+    /// in entry order.
+    pub fn mint_batch(
+        env: Env,
+        payer: Address,
+        pool_id: u64,
+        season_id: u64,
+        entries: Vec<BatchEntry>,
+    ) -> Result<Vec<u64>, Error> {
+        payer.require_auth();
+        let count = entries.len();
+        if count == 0 || count > MAX_BATCH {
+            return Err(Error::InvalidBatch);
         }
 
         let rp = read_risk_pool(&env)?;
         let client = RiskPoolClient::new(&env, &rp);
-        let premium = client.premium_for(&pool_id, &coverage);
-        if premium > max_premium {
-            return Err(Error::QuoteMismatch);
+        let mut ids = Vec::new(&env);
+        for entry in entries.iter() {
+            let BatchEntry {
+                owner,
+                terms,
+                max_premium,
+                metadata,
+            } = entry;
+            let id = mint_one(
+                &env,
+                &client,
+                owner,
+                &payer,
+                pool_id,
+                season_id,
+                terms,
+                max_premium,
+                metadata,
+            )?;
+            ids.push_back(id);
         }
-        let net = client.collect_premium(&pool_id, &season_id, &buyer, &premium);
 
-        let policy_id = env
-            .storage()
-            .instance()
-            .get(&DataKey::PolicyCounter)
-            .unwrap_or(0u64)
-            .checked_add(1)
-            .ok_or(Error::Overflow)?;
-        env.storage()
-            .instance()
-            .set(&DataKey::PolicyCounter, &policy_id);
-
-        let record = PolicyRecord {
-            owner: buyer.clone(),
+        BatchMinted {
+            payer,
             pool_id,
             season_id,
-            region,
-            coverage,
-            index_ref,
-            window_start,
-            window_end,
-            severity_curve,
-            premium_paid: premium,
-            net_reserved: net,
-            state: PolicyState::Active,
-        };
-        write_persistent(&env, &DataKey::Policy(policy_id), &record);
-        write_persistent(&env, &DataKey::MetaPointer(policy_id), &metadata);
-
-        extend_instance_ttl(&env);
-        PolicyMinted {
-            policy_id,
-            owner: buyer,
-            pool_id,
-            season_id,
-            coverage,
-            premium_paid: premium,
+            count,
         }
         .publish(&env);
-        Ok(policy_id)
+        Ok(ids)
     }
 
     /// Mark an `Active` policy as `Triggered` (FR-POL-1). Guardian only; the
@@ -351,6 +406,137 @@ impl Policy {
             .get(&DataKey::MetaPointer(policy_id))
             .ok_or(Error::PolicyNotFound)
     }
+
+    /// Set whether policies of a pool may be transferred (FR-POL-6). Guardian
+    /// only. Default is non transferable, so a pool must opt in explicitly.
+    pub fn set_transferable(env: Env, pool_id: u64, allowed: bool) -> Result<(), Error> {
+        require_admin(&env)?;
+        write_persistent(&env, &DataKey::Transferable(pool_id), &allowed);
+        extend_instance_ttl(&env);
+        TransferabilitySet { pool_id, allowed }.publish(&env);
+        Ok(())
+    }
+
+    /// Read whether a pool's policies may be transferred. Defaults to `false`
+    /// (FR-POL-6) when never set.
+    pub fn transferable(env: Env, pool_id: u64) -> bool {
+        read_transferable(&env, pool_id)
+    }
+
+    /// Transfer a policy to a new owner (FR-POL-6). Current owner only, permitted
+    /// only when the pool allows transfers (else `NotTransferable`, 203) and only
+    /// while the policy is `Active` (else `InvalidState`, 201), so a policy with
+    /// a pending or settled payout cannot change hands. Emits `PolicyTransferred`.
+    pub fn transfer(env: Env, policy_id: u64, to: Address) -> Result<(), Error> {
+        let mut record = read_policy(&env, policy_id)?;
+        record.owner.require_auth();
+        if !read_transferable(&env, record.pool_id) {
+            return Err(Error::NotTransferable);
+        }
+        if record.state != PolicyState::Active {
+            return Err(Error::InvalidState);
+        }
+
+        let from = record.owner.clone();
+        record.owner = to.clone();
+        write_persistent(&env, &DataKey::Policy(policy_id), &record);
+
+        extend_instance_ttl(&env);
+        PolicyTransferred {
+            policy_id,
+            from,
+            to,
+        }
+        .publish(&env);
+        Ok(())
+    }
+}
+
+/// Mint a single policy, shared by `mint` (buyer funds and owns) and `mint_batch`
+/// (payer funds, entry owner owns). Validates the terms, quotes and checks the
+/// premium against `max_premium`, collects it from `payer` into risk-pool for the
+/// season, then writes an `Active` certificate for `owner` recording the gross
+/// paid and the net reserved. Emits `PolicyMinted`. Returns the new policy id.
+#[allow(clippy::too_many_arguments)]
+fn mint_one(
+    env: &Env,
+    client: &RiskPoolClient,
+    owner: Address,
+    payer: &Address,
+    pool_id: u64,
+    season_id: u64,
+    terms: PolicyTerms,
+    max_premium: i128,
+    metadata: BytesN<32>,
+) -> Result<u64, Error> {
+    let PolicyTerms {
+        region,
+        coverage,
+        index_ref,
+        window_start,
+        window_end,
+        severity_curve,
+    } = terms;
+    if coverage <= 0 {
+        return Err(Error::InvalidCoverage);
+    }
+    if window_end <= window_start {
+        return Err(Error::InvalidWindow);
+    }
+
+    let premium = client.premium_for(&pool_id, &coverage);
+    if premium > max_premium {
+        return Err(Error::QuoteMismatch);
+    }
+    let net = client.collect_premium(&pool_id, &season_id, payer, &premium);
+
+    let policy_id = env
+        .storage()
+        .instance()
+        .get(&DataKey::PolicyCounter)
+        .unwrap_or(0u64)
+        .checked_add(1)
+        .ok_or(Error::Overflow)?;
+    env.storage()
+        .instance()
+        .set(&DataKey::PolicyCounter, &policy_id);
+
+    let record = PolicyRecord {
+        owner: owner.clone(),
+        pool_id,
+        season_id,
+        region,
+        coverage,
+        index_ref,
+        window_start,
+        window_end,
+        severity_curve,
+        premium_paid: premium,
+        net_reserved: net,
+        state: PolicyState::Active,
+    };
+    write_persistent(env, &DataKey::Policy(policy_id), &record);
+    write_persistent(env, &DataKey::MetaPointer(policy_id), &metadata);
+
+    extend_instance_ttl(env);
+    PolicyMinted {
+        policy_id,
+        owner,
+        pool_id,
+        season_id,
+        coverage,
+        premium_paid: premium,
+    }
+    .publish(env);
+    Ok(policy_id)
+}
+
+/// Read whether a pool's policies may be transferred, defaulting to `false`.
+fn read_transferable(env: &Env, pool_id: u64) -> bool {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Transferable(pool_id))
+        .unwrap_or(false)
 }
 
 /// Persist a value under `key` and extend its TTL in one step.

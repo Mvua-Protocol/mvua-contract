@@ -93,7 +93,7 @@ sequenceDiagram
   POL-->>Buyer: policy_id, event PolicyMinted
 ```
 
-Premium custody lands in `risk-pool` before the certificate is marked active, so a policy never exists without its premium collected. The premium curve is a provisional linear model (`premium_for`, DR-0022), rounded up so integer truncation never underprices the pool. `policy` holds no value: it quotes and purchases against `risk-pool` over a cross contract client, and a cancellation before the coverage window opens refunds only the reserved net (fees are not reversed). Batch purchase (FR-POL-4) repeats the inner steps within instruction limits and is resumable on partial failure.
+Premium custody lands in `risk-pool` before the certificate is marked active, so a policy never exists without its premium collected. The premium curve is a provisional linear model (`premium_for`, DR-0022), rounded up so integer truncation never underprices the pool. `policy` holds no value: it quotes and purchases against `risk-pool` over a cross contract client, and a cancellation before the coverage window opens refunds only the reserved net (fees are not reversed). Batch purchase (FR-POL-4) mints a bounded list of policies for a cooperative in one atomic call: a single payer funds every entry, each entry names its own policy owner, and any entry that fails reverts the whole call so the cooperative retries the remaining members. The batch is capped (`MAX_BATCH`) to stay within instruction limits; a larger cooperative is split into several atomic calls client side (DR-0023).
 
 ### 4.2 Observation to payout
 
@@ -191,7 +191,7 @@ Every contract defines exactly one `#[contracterror]` enum. Error codes are numb
 | Contract | Code range | Example variants |
 |---|---|---|
 | `risk-pool` | 100 to 199 | `PoolNotFound` (100), `InsufficientReserves` (101), `SolvencyViolated` (102), `SeasonNotOpen` (103), `TrancheWithdrawBlocked` (104), `FeeCapExceeded` (105), `InvalidConfig` (106), `InvalidAmount` (107), `InsufficientReceipts` (108), `TrancheCapExceeded` (109), `InvalidSeasonState` (110), `SeasonNotFound` (111) |
-| `policy` | 200 to 299 | `PolicyNotFound` (200), `InvalidState` (201), `WindowStarted` (202), `NotTransferable` (203), `QuoteMismatch` (204), `InvalidCoverage` (205), `InvalidWindow` (206), `NotExpired` (207) |
+| `policy` | 200 to 299 | `PolicyNotFound` (200), `InvalidState` (201), `WindowStarted` (202), `NotTransferable` (203), `QuoteMismatch` (204), `InvalidCoverage` (205), `InvalidWindow` (206), `NotExpired` (207), `InvalidBatch` (208) |
 | `oracle-adapter` | 300 to 399 | `UnknownPublisher` (300), `BadSignature` (301), `ObservationStale` (302), `Challenged` (303), `RegistryTimelock` (304) |
 | `trigger-engine` | 400 to 499 | `IndexNotFound` (400), `StaleIndex` (401), `AlreadyFinalized` (402), `NotTriggered` (403), `NonDeterministicInput` (404) |
 | `payout-vault` | 500 to 599 | `Paused` (500), `BatchComplete` (501), `NoFinalizedTrigger` (502), `PayoutExists` (503) |

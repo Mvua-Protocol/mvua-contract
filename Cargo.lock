@@ -1051,6 +1051,7 @@ name = "policy"
 version = "0.1.0"
 dependencies = [
  "common",
+ "risk-pool",
  "soroban-sdk",
  "test-utils",
 ]
