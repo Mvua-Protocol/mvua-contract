@@ -73,7 +73,10 @@ fn error_codes_match_contract_range() {
     assert_eq!(Error::NoPendingChange as u32, 306);
     assert_eq!(Error::PendingExists as u32, 307);
     assert_eq!(Error::InvalidObservation as u32, 308);
-    assert_eq!(Error::Unauthorized as u32, common::error_codes::UNAUTHORIZED);
+    assert_eq!(
+        Error::Unauthorized as u32,
+        common::error_codes::UNAUTHORIZED
+    );
     assert_eq!(
         Error::TimelockPending as u32,
         common::error_codes::TIMELOCK_PENDING
@@ -266,7 +269,9 @@ fn forged_signature_traps() {
     let forged = sign(&env, &signer(11), &region, &metric, ts, 50);
     // A forged signature traps in ed25519_verify (host error, not a contract
     // error), so try_submit returns the outer Err.
-    assert!(client.try_submit(&region, &metric, &ts, &50, &pk, &forged).is_err());
+    assert!(client
+        .try_submit(&region, &metric, &ts, &50, &pk, &forged)
+        .is_err());
 }
 
 // Sign and submit a value from `sk` at the current ledger time. Returns slot.
@@ -406,8 +411,3 @@ fn median_with_no_observations_is_stale() {
         Err(Ok(Error::ObservationStale))
     );
 }
-
-
-
-
-
