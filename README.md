@@ -101,6 +101,8 @@ The policy contract is the buyer facing certificate and its lifecycle. It holds 
 - **Lifecycle**: a forward state machine, `Active` to `Triggered` to `Paid` for a claim, `Active` to `Expired` after the coverage window, and `Active` to `Cancelled` before it opens. `mark_triggered` and `mark_paid` are guardian only; `expire` is permissionless once the window has ended.
 - **Cancellation**: an owner may `cancel` before the coverage window opens, which refunds the reserved net premium from the risk pool (fees already accrued to the treasury are not reversed).
 - **Off chain metadata**: each policy carries an opaque `BytesN<32>` pointer (`set_metadata`, `metadata`) that resolves off chain, so no personally identifying information is ever stored on chain.
+- **Batch purchase**: a cooperative funds a bounded list of policies in one atomic `mint_batch` call, each policy owned by its own farmer; the batch is capped so it stays within instruction limits, and a larger group is split into several calls.
+- **Transferability**: transfers are off by default per pool. A guardian may enable them with `set_transferable`, after which the owner of an `Active` policy may `transfer` it; a triggered, paid, or expired policy cannot change hands.
 
 The premium curve is a documented placeholder pending calibration against the index model (private planning repo, DR-0022).
 

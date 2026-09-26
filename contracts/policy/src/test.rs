@@ -103,10 +103,12 @@ fn error_codes_match_contract_range() {
     assert_eq!(Error::PolicyNotFound as u32, 200);
     assert_eq!(Error::InvalidState as u32, 201);
     assert_eq!(Error::WindowStarted as u32, 202);
+    assert_eq!(Error::NotTransferable as u32, 203);
     assert_eq!(Error::QuoteMismatch as u32, 204);
     assert_eq!(Error::InvalidCoverage as u32, 205);
     assert_eq!(Error::InvalidWindow as u32, 206);
     assert_eq!(Error::NotExpired as u32, 207);
+    assert_eq!(Error::InvalidBatch as u32, 208);
     assert_eq!(
         Error::Unauthorized as u32,
         common::error_codes::UNAUTHORIZED
@@ -297,4 +299,143 @@ fn policy_and_metadata_report_missing_ids() {
     let pol = PolicyClient::new(&env, &pol_id);
     assert_eq!(pol.try_policy(&999), Err(Ok(Error::PolicyNotFound)));
     assert_eq!(pol.try_metadata(&999), Err(Ok(Error::PolicyNotFound)));
+}
+
+// A batch line item for `owner` at the standard terms and quoted premium.
+fn batch_entry(env: &Env, owner: &Address) -> BatchEntry {
+    BatchEntry {
+        owner: owner.clone(),
+        terms: standard_terms(),
+        max_premium: EXPECTED_PREMIUM,
+        metadata: BytesN::from_array(env, &[3u8; 32]),
+    }
+}
+
+#[test]
+fn mint_batch_mints_for_each_owner_from_one_payer() {
+    let (env, rp_id, pol_id, token, pool_id, season_id, _buyer) = setup();
+    let pol = PolicyClient::new(&env, &pol_id);
+    let rp = PoolClient::new(&env, &rp_id);
+    let tok = token::TokenClient::new(&env, &token);
+
+    // A cooperative funds the whole batch; each policy is owned by a farmer.
+    let payer = random_address(&env);
+    token::StellarAssetClient::new(&env, &token).mint(&payer, &1_000_000);
+    let alice = random_address(&env);
+    let bob = random_address(&env);
+
+    let mut entries = Vec::new(&env);
+    entries.push_back(batch_entry(&env, &alice));
+    entries.push_back(batch_entry(&env, &bob));
+
+    let ids = pol.mint_batch(&payer, &pool_id, &season_id, &entries);
+    assert_eq!(ids.len(), 2);
+    assert_eq!(ids.get(0).unwrap(), 1);
+    assert_eq!(ids.get(1).unwrap(), 2);
+
+    // Each certificate is Active and owned by its farmer, not the payer.
+    assert_eq!(pol.policy(&1).owner, alice);
+    assert_eq!(pol.policy(&2).owner, bob);
+    assert_eq!(pol.policy(&1).state, PolicyState::Active);
+
+    // The payer funded both premiums and the pool booked them for the season.
+    assert_eq!(tok.balance(&payer), 1_000_000 - 2 * EXPECTED_PREMIUM);
+    assert_eq!(
+        rp.season(&pool_id, &season_id).premiums_in,
+        2 * EXPECTED_PREMIUM
+    );
+}
+
+#[test]
+fn mint_batch_rejects_empty_and_oversized() {
+    let (env, _rp_id, pol_id, token, pool_id, season_id, _buyer) = setup();
+    let pol = PolicyClient::new(&env, &pol_id);
+    let payer = random_address(&env);
+    token::StellarAssetClient::new(&env, &token).mint(&payer, &100_000_000);
+
+    let empty: Vec<BatchEntry> = Vec::new(&env);
+    assert_eq!(
+        pol.try_mint_batch(&payer, &pool_id, &season_id, &empty),
+        Err(Ok(Error::InvalidBatch))
+    );
+
+    let mut too_many = Vec::new(&env);
+    for _ in 0..(MAX_BATCH + 1) {
+        too_many.push_back(batch_entry(&env, &random_address(&env)));
+    }
+    assert_eq!(
+        pol.try_mint_batch(&payer, &pool_id, &season_id, &too_many),
+        Err(Ok(Error::InvalidBatch))
+    );
+}
+
+#[test]
+fn mint_batch_honors_per_entry_max_premium() {
+    let (env, _rp_id, pol_id, token, pool_id, season_id, _buyer) = setup();
+    let pol = PolicyClient::new(&env, &pol_id);
+    let payer = random_address(&env);
+    token::StellarAssetClient::new(&env, &token).mint(&payer, &1_000_000);
+
+    // An entry whose cap is a hair under the quote traps the whole batch.
+    let cheap = BatchEntry {
+        max_premium: EXPECTED_PREMIUM - 1,
+        ..batch_entry(&env, &random_address(&env))
+    };
+    let mut entries = Vec::new(&env);
+    entries.push_back(cheap);
+    assert_eq!(
+        pol.try_mint_batch(&payer, &pool_id, &season_id, &entries),
+        Err(Ok(Error::QuoteMismatch))
+    );
+}
+
+#[test]
+fn transferable_defaults_false_and_guardian_can_set_it() {
+    let (env, _rp_id, pol_id, _token, pool_id, _season_id, _buyer) = setup();
+    let pol = PolicyClient::new(&env, &pol_id);
+    assert!(!pol.transferable(&pool_id));
+    pol.set_transferable(&pool_id, &true);
+    assert!(pol.transferable(&pool_id));
+}
+
+#[test]
+fn transfer_moves_owner_when_pool_allows_it() {
+    let (env, _rp_id, pol_id, _token, pool_id, season_id, buyer) = setup();
+    let pol = PolicyClient::new(&env, &pol_id);
+    let policy_id = mint_policy(&env, &pol_id, &buyer, pool_id, season_id);
+
+    pol.set_transferable(&pool_id, &true);
+    let new_owner = random_address(&env);
+    pol.transfer(&policy_id, &new_owner);
+    assert_eq!(pol.policy(&policy_id).owner, new_owner);
+}
+
+#[test]
+fn transfer_blocked_when_pool_not_transferable() {
+    let (env, _rp_id, pol_id, _token, pool_id, season_id, buyer) = setup();
+    let pol = PolicyClient::new(&env, &pol_id);
+    let policy_id = mint_policy(&env, &pol_id, &buyer, pool_id, season_id);
+
+    // Default is non transferable, so a transfer is rejected outright.
+    let new_owner = random_address(&env);
+    assert_eq!(
+        pol.try_transfer(&policy_id, &new_owner),
+        Err(Ok(Error::NotTransferable))
+    );
+}
+
+#[test]
+fn transfer_rejected_on_non_active_policy() {
+    let (env, _rp_id, pol_id, _token, pool_id, season_id, buyer) = setup();
+    let pol = PolicyClient::new(&env, &pol_id);
+    let policy_id = mint_policy(&env, &pol_id, &buyer, pool_id, season_id);
+
+    // Even on a transferable pool, a triggered policy cannot change hands.
+    pol.set_transferable(&pool_id, &true);
+    pol.mark_triggered(&policy_id);
+    let new_owner = random_address(&env);
+    assert_eq!(
+        pol.try_transfer(&policy_id, &new_owner),
+        Err(Ok(Error::InvalidState))
+    );
 }
