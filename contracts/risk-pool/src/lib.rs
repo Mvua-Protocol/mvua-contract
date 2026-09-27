@@ -155,6 +155,9 @@ pub enum DataKey {
     Admin,
     /// Policy contract permitted to request premium refunds. Instance durability.
     PolicyContract,
+    /// Payout vault permitted to release settled payouts (`pay_out`). Instance
+    /// durability.
+    PayoutVault,
     /// Monotonic counter for allocating pool ids. Instance durability.
     PoolCount,
     /// Monotonic counter for allocating season ids within a pool.
@@ -276,6 +279,16 @@ pub struct PremiumRefunded {
     pub net: i128,
 }
 
+/// Emitted when a settled payout is released to the payout vault. Topic
+/// `payout_released`; data is the pool, season, recipient vault, and amount.
+#[contractevent(topics = ["payout_released"], data_format = "map")]
+pub struct PayoutReleased {
+    pub pool_id: u64,
+    pub season_id: u64,
+    pub to: Address,
+    pub amount: i128,
+}
+
 #[contract]
 pub struct RiskPool;
 
@@ -316,6 +329,25 @@ impl RiskPool {
         env.storage()
             .instance()
             .get(&DataKey::PolicyContract)
+            .ok_or(Error::NotInitialized)
+    }
+
+    /// Configure the payout vault permitted to release settled payouts
+    /// (`pay_out`, ARCHITECTURE section 7). Guardian only. Set once the payout
+    /// vault is deployed; `pay_out` authorizes no other caller.
+    pub fn set_payout_vault(env: Env, vault: Address) -> Result<(), Error> {
+        require_admin(&env)?;
+        env.storage().instance().set(&DataKey::PayoutVault, &vault);
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Read the configured payout vault address, or `NotInitialized` (902) if
+    /// none has been set.
+    pub fn payout_vault(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::PayoutVault)
             .ok_or(Error::NotInitialized)
     }
 
@@ -782,6 +814,72 @@ impl RiskPool {
         Ok(net)
     }
 
+    /// Release a settled payout to the payout vault (FR-PAY-1, FR-POOL-5).
+    /// Callable only by the configured payout vault (`set_payout_vault`), which
+    /// authorizes itself in the cross contract call. Decrements reserves,
+    /// records the amount against the season's `payouts_paid` so settlement
+    /// reconciles it, and transfers the underlying to `to` (the vault, which
+    /// then credits each holder's claim ledger). Accepted only while the season
+    /// is `Active` or `Closed` (else `InvalidSeasonState`, 110): a payout fires
+    /// during the covered window or after close but before settlement. Rejected
+    /// if it would exceed available reserves (`InsufficientReserves`, 101) or
+    /// break the solvency invariant `reserves >= committed` (`SolvencyViolated`,
+    /// 102). Returns the amount released.
+    pub fn pay_out(
+        env: Env,
+        pool_id: u64,
+        season_id: u64,
+        to: Address,
+        amount: i128,
+    ) -> Result<i128, Error> {
+        require_payout_vault(&env)?;
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let config = read_config(&env, pool_id)?;
+        let mut season = read_season(&env, pool_id, season_id)?;
+        if season.state != SeasonState::Active && season.state != SeasonState::Closed {
+            return Err(Error::InvalidSeasonState);
+        }
+
+        let mut solvency = read_solvency(&env, pool_id)?;
+        if amount > solvency.reserves {
+            return Err(Error::InsufficientReserves);
+        }
+        let new_reserves = solvency
+            .reserves
+            .checked_sub(amount)
+            .ok_or(Error::Overflow)?;
+        if new_reserves < solvency.committed {
+            return Err(Error::SolvencyViolated);
+        }
+
+        season.payouts_paid = season
+            .payouts_paid
+            .checked_add(amount)
+            .ok_or(Error::Overflow)?;
+        write_persistent(&env, &DataKey::Season(pool_id, season_id), &season);
+
+        solvency.reserves = new_reserves;
+        write_persistent(&env, &DataKey::Solvency(pool_id), &solvency);
+
+        token::TokenClient::new(&env, &config.token).transfer(
+            &env.current_contract_address(),
+            &to,
+            &amount,
+        );
+
+        extend_instance_ttl(&env);
+        PayoutReleased {
+            pool_id,
+            season_id,
+            to,
+            amount,
+        }
+        .publish(&env);
+        Ok(amount)
+    }
+
     /// Settle a `Closed` season (FR-POOL-6, settlement waterfall). Guardian
     /// only. A surplus (net premiums over payouts) is credited to the junior
     /// tranche as residual yield; a loss is absorbed by junior capital first
@@ -905,6 +1003,19 @@ fn require_policy_contract(env: &Env) -> Result<Address, Error> {
         .ok_or(Error::Unauthorized)?;
     policy.require_auth();
     Ok(policy)
+}
+
+/// Read the configured payout vault and require its authorization. Fails with
+/// `Unauthorized` (900) if no vault has been configured, so a payout can never
+/// be authorized before governance wires the two contracts.
+fn require_payout_vault(env: &Env) -> Result<Address, Error> {
+    let vault: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::PayoutVault)
+        .ok_or(Error::Unauthorized)?;
+    vault.require_auth();
+    Ok(vault)
 }
 
 /// Apply a forward season transition. Guardian only. Rejects a season whose
