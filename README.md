@@ -75,7 +75,7 @@ The workspace is a set of focused Soroban contract crates plus shared support cr
 | `risk-pool` | Pool creation, tranches, premiums, season lifecycle, settlement | **implemented** (see below) |
 | `policy` | Policy certificates and lifecycle | **implemented** (see below) |
 | `oracle-adapter` | Publisher registry, ed25519 signed observations, median aggregation | **implemented** (see below) |
-| `trigger-engine` | Index definitions and deterministic evaluation | scaffolded |
+| `trigger-engine` | Index definitions and deterministic evaluation | **implemented** (see below) |
 | `payout-vault` | Resumable batch payouts to claimable balances, pause | scaffolded |
 | `test-utils` | Shared test fixtures, scenario builders, mock publishers | shared, in use |
 
@@ -117,6 +117,18 @@ The oracle adapter is the protocol's trust boundary for external weather data. T
 - **Reads**: `is_publisher`, `publisher_info`, `pending_publisher`, `observation`, `head`, `is_challenged`, and `staleness_bound` expose state for the app and indexer.
 
 The ring size, minimum publisher count, staleness bound, and registry timelock are provisional and governance tunable, pending calibration on testnet (private planning repo, DR-0024).
+
+### trigger-engine: what is implemented
+
+The trigger engine turns a season's daily index values into an irreversible payout severity. It holds immutable index definitions and drives each coverage window through a fail safe state machine.
+
+- **Index definitions**: `create_index` stores an immutable `IndexDefinition` (rainfall shortfall or consecutive dry days) with a monotonic id and no update path, so policies keep the terms they were sold under; a new definition gets a new id. Parameters are validated per kind, and a definition that could never evaluate deterministically is rejected.
+- **Daily ingestion**: `record_day` folds each day's median into a bounded per window accumulator (cumulative rainfall, and the longest consecutive dry run) in one pass, so the contract never stores an unbounded daily series. Days must arrive strictly increasing; a replay, an out of order day, a negative value, or a day past the window length is rejected. The guardian feeds these values in this sprint; the integrated flow reads the oracle's trusted median directly in a later sprint.
+- **Deterministic evaluation**: `evaluate` is permissionless and pure. An incomplete window is reported stale so a payout can never fire on partial data. On a breach it moves the window from healthy to triggered, computing the shortfall or dry run severity in basis points exactly as the index spec's golden vectors require.
+- **Finalization and payout**: `finalize` is guardian only and permitted only after a challenge window has elapsed since the trigger, then writes an irreversible finalized state with its severity. `payout_for` scales a coverage amount by that severity, rounding down to favor the pool.
+- **Reads**: `index_def`, `trigger_state`, `accumulator`, and `index_count` expose state for the app and indexer.
+
+The challenge window and the index parameters are provisional and governance tunable; the direct `oracle-adapter` median cross call and the payout vault wiring are deferred to the integrated flow sprint (private planning repo, DR-0025).
 
 <!-- PLACEHOLDER_TAIL -->
 

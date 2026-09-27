@@ -168,12 +168,16 @@ Key naming: a `#[contracttype]` enum named `DataKey` per contract, variants in `
 
 ### 5.4 trigger-engine
 
+A window instance is keyed by `(index_id, window_id)`, so one immutable definition serves many seasons and each season's accumulator, trigger state, and cursor are independent (DR-0025).
+
 | Key | Value | Durability | Notes |
 |---|---|---|---|
 | `Admin` | guardian config reference | Instance | Index definition changes are timelocked |
-| `IndexDef(index_id)` | metrics, window, comparison, threshold, data source ref | Persistent | First class object (FR-TRG-1) |
-| `TriggerState(region, window)` | Healthy, Triggered(at), Finalized(at, severity) | Persistent | Finalized is irreversible (FR-TRG-4) |
-| `EvalCursor(region, window)` | last evaluated observation seq | Persistent | Determinism and replay safety |
+| `IndexCount` | next index id | Instance | Monotonic counter |
+| `IndexDef(index_id)` | kind, region, metric, window, thresholds, data source ref | Persistent | First class immutable object (FR-TRG-1) |
+| `Accumulator(index_id, window_id)` | days_recorded, rain_sum, current_run, max_run | Persistent | Bounded per window reduction of the daily series (DR-0025) |
+| `TriggerState(index_id, window_id)` | Healthy, Triggered(at), Finalized(at, severity) | Persistent | Finalized is irreversible (FR-TRG-4) |
+| `EvalCursor(index_id, window_id)` | last recorded day | Persistent | Strictly increasing; replay safety |
 
 ### 5.5 payout-vault
 
@@ -194,7 +198,7 @@ Every contract defines exactly one `#[contracterror]` enum. Error codes are numb
 | `risk-pool` | 100 to 199 | `PoolNotFound` (100), `InsufficientReserves` (101), `SolvencyViolated` (102), `SeasonNotOpen` (103), `TrancheWithdrawBlocked` (104), `FeeCapExceeded` (105), `InvalidConfig` (106), `InvalidAmount` (107), `InsufficientReceipts` (108), `TrancheCapExceeded` (109), `InvalidSeasonState` (110), `SeasonNotFound` (111) |
 | `policy` | 200 to 299 | `PolicyNotFound` (200), `InvalidState` (201), `WindowStarted` (202), `NotTransferable` (203), `QuoteMismatch` (204), `InvalidCoverage` (205), `InvalidWindow` (206), `NotExpired` (207), `InvalidBatch` (208) |
 | `oracle-adapter` | 300 to 399 | `UnknownPublisher` (300), `BadSignature` (301), `ObservationStale` (302), `Challenged` (303), `RegistryTimelock` (304), `PublisherExists` (305), `NoPendingChange` (306), `PendingExists` (307), `InvalidObservation` (308) |
-| `trigger-engine` | 400 to 499 | `IndexNotFound` (400), `StaleIndex` (401), `AlreadyFinalized` (402), `NotTriggered` (403), `NonDeterministicInput` (404) |
+| `trigger-engine` | 400 to 499 | `IndexNotFound` (400), `StaleIndex` (401), `AlreadyFinalized` (402), `NotTriggered` (403), `NonDeterministicInput` (404), `InvalidIndexDef` (405) |
 | `payout-vault` | 500 to 599 | `Paused` (500), `BatchComplete` (501), `NoFinalizedTrigger` (502), `PayoutExists` (503) |
 | shared or auth | 900 to 999 | `Unauthorized` (900), `TimelockPending` (901), `NotInitialized` (902), `Overflow` (903) |
 
@@ -240,5 +244,5 @@ These hold across contract boundaries and are the backbone of the Phase 5 invari
 
 1. ~~Receipt token representation: internal ledger entries versus separate SAC token contracts per tranche.~~ **Resolved (DR-0020, 2026-09-25):** receipts are held as an internal per holder ledger (`Receipt(pool_id, tier, holder)`), not a separate token contract, for v1. Tranche transferability, if enabled, moves ledger balances within the contract.
 2. Observation ring size N and staleness bound X: placeholders until the index spec backtests inform them (see `INDEX-SPEC.md`).
-3. Whether `trigger-engine` reads `oracle-adapter` directly by cross contract call or receives a pushed median snapshot. Leaning direct read for a single source of truth; confirm in P1.6 and P1.7.
+3. ~~Whether `trigger-engine` reads `oracle-adapter` directly by cross contract call or receives a pushed median snapshot.~~ **Partly resolved (DR-0025, 2026-09-27):** the direct cross contract read of `oracle-adapter.median` is the intended single source of truth, but it is deferred to the Sprint 1.8 integrated flow. In Sprint 1.7 the guardian feeds daily medians via `record_day`; the accumulator and evaluation are otherwise complete. Confirm the cross call wiring in P1.8.
 4. Claimable balance predicate policy (claim window length, reclaim of unclaimed funds to the pool). Confirm in P1.8.
