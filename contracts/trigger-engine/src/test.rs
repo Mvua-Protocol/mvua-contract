@@ -382,3 +382,135 @@ fn windows_finalize_independently() {
     assert!(matches!(breached, TriggerStatus::Triggered(_)));
     assert_eq!(client.evaluate(&idx, &1), TriggerStatus::Healthy);
 }
+
+// A mock oracle-adapter returning a fixed median, exercising the integrated
+// cross call (DR-0025) without standing up the real signed-observation ring.
+// The value is set at registration and returned for any region/metric.
+#[contract]
+pub struct MockOracle;
+
+#[contractimpl]
+impl MockOracle {
+    pub fn __constructor(env: Env, value: i128) {
+        env.storage().instance().set(&symbol_short!("v"), &value);
+    }
+    pub fn median(env: Env, _region: Symbol, _metric: Symbol) -> i128 {
+        env.storage().instance().get(&symbol_short!("v")).unwrap()
+    }
+}
+
+// A mock oracle that always reports stale/under-sourced data, mirroring
+// `oracle-adapter`'s `ObservationStale` (302). Its `median` returns an `Err`, so
+// the `OracleAdapterClient::median` cross call traps and the day is never folded.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum MockError {
+    Stale = 302,
+}
+
+#[contract]
+pub struct MockOracleStale;
+
+#[contractimpl]
+impl MockOracleStale {
+    pub fn median(_env: Env, _region: Symbol, _metric: Symbol) -> Result<i128, MockError> {
+        Err(MockError::Stale)
+    }
+}
+
+// Register a MockOracle returning `value` and point a trigger-engine client at it.
+fn with_oracle(env: &Env, client: &TriggerEngineClient, value: i128) -> Address {
+    let oracle = env.register(MockOracle, (value,));
+    client.set_oracle(&oracle);
+    oracle
+}
+
+#[test]
+fn set_oracle_round_trips() {
+    let (env, _admin, id) = setup();
+    let client = TriggerEngineClient::new(&env, &id);
+    // Unset: reading the oracle is OracleNotConfigured.
+    assert_eq!(client.try_oracle(), Err(Ok(Error::OracleNotConfigured)));
+    let oracle = with_oracle(&env, &client, 130);
+    assert_eq!(client.oracle(), oracle);
+}
+
+#[test]
+fn record_day_from_oracle_requires_configuration() {
+    let (env, _admin, id) = setup();
+    let client = TriggerEngineClient::new(&env, &id);
+    let idx = client.create_index(&rainfall_params(&env, 4));
+    // No oracle set yet.
+    assert_eq!(
+        client.try_record_day_from_oracle(&idx, &0, &1),
+        Err(Ok(Error::OracleNotConfigured))
+    );
+}
+
+#[test]
+fn record_day_from_oracle_folds_and_returns_median() {
+    let (env, _admin, id) = setup();
+    let client = TriggerEngineClient::new(&env, &id);
+    let idx = client.create_index(&rainfall_params(&env, 4));
+    with_oracle(&env, &client, 130);
+    // The oracle-read value is folded and returned.
+    assert_eq!(client.record_day_from_oracle(&idx, &0, &1), 130);
+    let acc = client.accumulator(&idx, &0);
+    assert_eq!(acc.days_recorded, 1);
+    assert_eq!(acc.rain_sum, 130);
+}
+
+#[test]
+fn record_day_from_oracle_shares_determinism_guards() {
+    let (env, _admin, id) = setup();
+    let client = TriggerEngineClient::new(&env, &id);
+    let idx = client.create_index(&rainfall_params(&env, 4));
+    with_oracle(&env, &client, 130);
+    client.record_day_from_oracle(&idx, &0, &2);
+    // Replaying or going backwards is rejected, same as record_day.
+    assert_eq!(
+        client.try_record_day_from_oracle(&idx, &0, &2),
+        Err(Ok(Error::NonDeterministicInput))
+    );
+    assert_eq!(
+        client.try_record_day_from_oracle(&idx, &0, &1),
+        Err(Ok(Error::NonDeterministicInput))
+    );
+}
+
+#[test]
+fn oracle_flow_triggers_and_finalizes() {
+    let (env, _admin, id) = setup();
+    let client = TriggerEngineClient::new(&env, &id);
+    let idx = client.create_index(&rainfall_params(&env, 4));
+    with_oracle(&env, &client, 130);
+    // Four oracle-fed days of 130 -> sum 520 -> ratio 6500 -> triggered.
+    for day in 1..=4u64 {
+        client.record_day_from_oracle(&idx, &0, &day);
+    }
+    let now = env.ledger().timestamp();
+    assert_eq!(client.evaluate(&idx, &0), TriggerStatus::Triggered(now));
+    advance_time(&env, CHALLENGE + 1);
+    let at = env.ledger().timestamp();
+    // Severity 2857 for a ratio of 6500 (golden vector G3).
+    assert_eq!(
+        client.finalize(&idx, &0),
+        TriggerStatus::Finalized(at, 2857)
+    );
+}
+
+#[test]
+fn stale_oracle_traps_and_folds_nothing() {
+    let (env, _admin, id) = setup();
+    let client = TriggerEngineClient::new(&env, &id);
+    let idx = client.create_index(&rainfall_params(&env, 4));
+    let oracle = env.register(MockOracleStale, ());
+    client.set_oracle(&oracle);
+    // A stale oracle traps the cross call: the whole record reverts (fail safe).
+    assert!(client.try_record_day_from_oracle(&idx, &0, &1).is_err());
+    // No day was folded.
+    let acc = client.accumulator(&idx, &0);
+    assert_eq!(acc.days_recorded, 0);
+    assert_eq!(acc.rain_sum, 0);
+}

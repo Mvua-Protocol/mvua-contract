@@ -7,17 +7,20 @@
 //! drives each window through the trigger state machine to an irreversible
 //! finalization with a severity in basis points.
 //!
-//! Daily values are ingested by the guardian in this sprint (`record_day`); the
-//! on chain cross call to `oracle-adapter`'s trusted median replaces that
-//! guardian feed in the Sprint 1.8 integrated flow (DR-0025). Evaluation is
-//! fail safe: an incomplete window is `StaleIndex`, never a payout.
+//! Daily values are ingested one of two ways. The guardian may feed a median
+//! directly (`record_day`), the Sprint 1.7 path retained as a fallback. In the
+//! Sprint 1.8 integrated flow (DR-0025) `record_day_from_oracle` reads the
+//! trusted median from `oracle-adapter` on chain instead: the guardian asserts
+//! only which window day it is, and the value comes from the corroborated
+//! oracle. A stale or thin oracle traps the read, so no day is folded.
+//! Evaluation is fail safe: an incomplete window is `StaleIndex`, never a payout.
 //!
 //! Requirements: FR-TRG-1 to 5.
 
 use common::{apply_bps, extend_instance_ttl, extend_persistent_ttl, Bps, BPS_DENOMINATOR};
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contracttype, Address, BytesN, Env,
-    Symbol,
+    contract, contractclient, contracterror, contractevent, contractimpl, contracttype, Address,
+    BytesN, Env, Symbol,
 };
 
 /// Challenge window between a trigger being observed and it becoming finalizable,
@@ -113,6 +116,9 @@ pub enum DataKey {
     Admin,
     /// Monotonic counter for the next index id. Instance durability.
     IndexCount,
+    /// The `oracle-adapter` contract address for the integrated median feed
+    /// (DR-0025). Instance durability. Set by the guardian via `set_oracle`.
+    OracleRef,
     /// An index definition keyed by its id (first class object, FR-TRG-1).
     IndexDef(u64),
     /// Window accumulator for an `(index_id, window_id)` instance.
@@ -135,6 +141,7 @@ pub enum Error {
     NotTriggered = 403,
     NonDeterministicInput = 404,
     InvalidIndexDef = 405,
+    OracleNotConfigured = 406,
     Unauthorized = 900,
     TimelockPending = 901,
     NotInitialized = 902,
@@ -171,6 +178,24 @@ pub struct Finalized {
     pub window_id: u64,
     pub at: u64,
     pub severity: Bps,
+}
+
+/// Emitted when the oracle-adapter address is configured. Topic `oracle_set`.
+#[contractevent(topics = ["oracle_set"], data_format = "single-value")]
+pub struct OracleSet {
+    pub oracle: Address,
+}
+
+/// Cross contract view of `oracle-adapter`'s trusted median (DR-0025 integrated
+/// flow). The method returns the median as a primitive; the real function
+/// returns `Result<i128, Error>`, so a stale or under-sourced index (its
+/// `ObservationStale`) traps this call and reverts the day recording rather
+/// than folding an untrusted value. The fail safe holds across the boundary.
+/// Declared locally (the DR-0022 primitive-only pattern) so trigger-engine
+/// depends on `oracle-adapter` only as a dev-dependency.
+#[contractclient(name = "OracleAdapterClient")]
+pub trait OracleAdapterInterface {
+    fn median(env: Env, region: Symbol, metric: Symbol) -> i128;
 }
 
 #[contract]
@@ -214,11 +239,13 @@ impl TriggerEngine {
         Ok(index_id)
     }
 
-    /// Record one day's median value into a window accumulator. Guardian only in
-    /// this sprint; the Sprint 1.8 integrated flow replaces this with an on chain
-    /// read of `oracle-adapter`'s trusted median (DR-0025). Days must arrive in
-    /// strictly increasing order and stop at `window_len`; a negative value, a
-    /// replay, or an overrun is `NonDeterministicInput` (404).
+    /// Record one day's median value into a window accumulator. Guardian only.
+    /// This is the fallback path (and the local-testing path): the guardian
+    /// asserts the value directly. The trustless path is `record_day_from_oracle`
+    /// below, which reads the value from `oracle-adapter` instead (DR-0025). Both
+    /// share `fold_day`. Days must arrive in strictly increasing order and stop at
+    /// `window_len`; a negative value, a replay, or an overrun is
+    /// `NonDeterministicInput` (404).
     pub fn record_day(
         env: Env,
         index_id: u64,
@@ -227,42 +254,57 @@ impl TriggerEngine {
         median_value: i128,
     ) -> Result<(), Error> {
         require_admin(&env)?;
-        if median_value < 0 {
-            return Err(Error::NonDeterministicInput);
-        }
         let def = read_def(&env, index_id)?;
-        if let Some(last) = read_cursor(&env, index_id, window_id) {
-            if day <= last {
-                return Err(Error::NonDeterministicInput);
-            }
-        }
-        let mut acc = read_accumulator(&env, index_id, window_id);
-        if acc.days_recorded >= def.params.window_len {
-            return Err(Error::NonDeterministicInput);
-        }
-        acc.rain_sum = acc
-            .rain_sum
-            .checked_add(median_value)
-            .ok_or(Error::Overflow)?;
-        if median_value <= def.params.dry_floor {
-            acc.current_run += 1;
-            if acc.current_run > acc.max_run {
-                acc.max_run = acc.current_run;
-            }
-        } else {
-            acc.current_run = 0;
-        }
-        acc.days_recorded += 1;
-        write_persistent(&env, &DataKey::Accumulator(index_id, window_id), &acc);
-        write_persistent(&env, &DataKey::EvalCursor(index_id, window_id), &day);
+        fold_day(&env, &def, index_id, window_id, day, median_value)
+    }
+
+    /// Record one day by reading the value from the configured `oracle-adapter`
+    /// (DR-0025 integrated flow). Guardian only: the guardian still asserts the
+    /// day-to-calendar mapping (which `window_id`/`day` a reading belongs to), but
+    /// the value itself is now the trusted on chain median rather than a guardian
+    /// assertion. Requires `set_oracle` first (`OracleNotConfigured` 406). A stale
+    /// or under-sourced oracle traps the cross call and reverts the whole record,
+    /// so a window can never be advanced on untrusted data. Returns the folded
+    /// median value.
+    pub fn record_day_from_oracle(
+        env: Env,
+        index_id: u64,
+        window_id: u64,
+        day: u64,
+    ) -> Result<i128, Error> {
+        require_admin(&env)?;
+        let def = read_def(&env, index_id)?;
+        let oracle: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleRef)
+            .ok_or(Error::OracleNotConfigured)?;
+        // Traps if the oracle reports `ObservationStale`; the day is not folded.
+        let value =
+            OracleAdapterClient::new(&env, &oracle).median(&def.params.region, &def.params.metric);
+        fold_day(&env, &def, index_id, window_id, day, value)?;
+        Ok(value)
+    }
+
+    /// Configure the `oracle-adapter` address for the integrated median feed
+    /// (DR-0025). Guardian only. Mirrors `risk-pool::set_payout_vault`: a setter
+    /// rather than a constructor argument, so the existing constructor and its
+    /// tests are unchanged. Re-callable to rotate the oracle.
+    pub fn set_oracle(env: Env, oracle: Address) -> Result<(), Error> {
+        require_admin(&env)?;
+        env.storage().instance().set(&DataKey::OracleRef, &oracle);
         extend_instance_ttl(&env);
-        DayRecorded {
-            index_id,
-            window_id,
-            day,
-        }
-        .publish(&env);
+        OracleSet { oracle }.publish(&env);
         Ok(())
+    }
+
+    /// Read the configured `oracle-adapter` address, or `OracleNotConfigured`
+    /// (406) if `set_oracle` was never called.
+    pub fn oracle(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::OracleRef)
+            .ok_or(Error::OracleNotConfigured)
     }
 
     /// Evaluate a window against its index (FR-TRG-2). Permissionless and
@@ -413,6 +455,53 @@ fn read_def(env: &Env, index_id: u64) -> Result<IndexDefinition, Error> {
         .persistent()
         .get(&DataKey::IndexDef(index_id))
         .ok_or(Error::IndexNotFound)
+}
+
+// Fold one day's value into a window accumulator. Shared by `record_day` (the
+// guardian-asserted value) and `record_day_from_oracle` (the oracle-read value)
+// so both ingestion paths apply the identical determinism guards and update. A
+// negative value, a replay or out-of-order day, or an overrun past `window_len`
+// is `NonDeterministicInput` (404).
+fn fold_day(
+    env: &Env,
+    def: &IndexDefinition,
+    index_id: u64,
+    window_id: u64,
+    day: u64,
+    value: i128,
+) -> Result<(), Error> {
+    if value < 0 {
+        return Err(Error::NonDeterministicInput);
+    }
+    if let Some(last) = read_cursor(env, index_id, window_id) {
+        if day <= last {
+            return Err(Error::NonDeterministicInput);
+        }
+    }
+    let mut acc = read_accumulator(env, index_id, window_id);
+    if acc.days_recorded >= def.params.window_len {
+        return Err(Error::NonDeterministicInput);
+    }
+    acc.rain_sum = acc.rain_sum.checked_add(value).ok_or(Error::Overflow)?;
+    if value <= def.params.dry_floor {
+        acc.current_run += 1;
+        if acc.current_run > acc.max_run {
+            acc.max_run = acc.current_run;
+        }
+    } else {
+        acc.current_run = 0;
+    }
+    acc.days_recorded += 1;
+    write_persistent(env, &DataKey::Accumulator(index_id, window_id), &acc);
+    write_persistent(env, &DataKey::EvalCursor(index_id, window_id), &day);
+    extend_instance_ttl(env);
+    DayRecorded {
+        index_id,
+        window_id,
+        day,
+    }
+    .publish(env);
+    Ok(())
 }
 
 // Read the last recorded day for a window instance, if any.
