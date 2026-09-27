@@ -133,6 +133,7 @@ Key naming: a `#[contracttype]` enum named `DataKey` per contract, variants in `
 |---|---|---|---|
 | `Admin` | guardian config reference | Instance | Multisig address set at init |
 | `PolicyContract` | policy contract address | Instance | Authorized caller of `refund_premium`; set by guardian via `set_policy_contract` |
+| `PayoutVault` | payout-vault contract address | Instance | Sole authorized caller of `pay_out`; set by guardian via `set_payout_vault` (DR-0026) |
 | `PoolCount` | u64 | Instance | Monotonic pool id source; ids start at 1 |
 | `SeasonCount(pool_id)` | u64 | Persistent | Monotonic season id source per pool; ids start at 1 |
 | `PoolConfig(pool_id)` | token, region list, season length, premium curve params, tranche config, fee schedule, transferability default | Persistent | Immutable fields fixed at creation; parameter fields change only via timelock |
@@ -181,13 +182,21 @@ A window instance is keyed by `(index_id, window_id)`, so one immutable definiti
 
 ### 5.5 payout-vault
 
+Constructed with five references: the guardian `Admin`, the `risk-pool` funds are drawn from, the `policy` contract (reserved for a future on chain record read, DR-0026), the `trigger-engine` queried for finalized severity, and the settlement `Token` (one SAC per deployment). Soroban has no host function to mint a classic Stellar claimable balance, so a payout is realized as a contract held `Claim(owner)` ledger that the holder later pushes to their address with `claim` (DR-0026, parallels the internal receipt ledger of DR-0020).
+
 | Key | Value | Durability | Notes |
 |---|---|---|---|
 | `Admin` | guardian config reference | Instance | |
 | `Paused` | bool | Instance | Emergency pause (FR-PAY-5) |
-| `Batch(region, window)` | total policies, cursor, state | Persistent | Resumable checkpoint (FR-PAY-2) |
-| `Payout(policy_id)` | amount, claimable_balance_id, paid_at | Persistent | One payout per policy per finalized trigger (FR-PAY-4) |
+| `Batch(index_id, window_id)` | policies_paid, total_disbursed, state | Persistent | Resumable checkpoint keyed by index window (FR-PAY-2); state Open, InProgress, Complete |
+| `Payout(policy_id)` | owner, amount, paid_at | Persistent | One payout per policy per finalized trigger; presence is the idempotency key (FR-PAY-4) |
 | `PoolRef` | risk-pool address | Instance | Set at init; source of committed funds |
+| `PolicyRef` | policy address | Instance | Set at init; reserved for a future on chain record read (DR-0026) |
+| `TriggerRef` | trigger-engine address | Instance | Set at init; queried via `payout_for`, which traps unless the window is finalized |
+| `Token` | settlement SAC address | Instance | Set at init; one asset per deployment |
+| `Claim(owner)` | i128 accrued | Persistent | Holder claimable balance; zeroed before the push in `claim` |
+
+Funds move only through the guarded `risk-pool.pay_out(pool_id, season_id, to, amount)`, authorized to the single address registered by `risk-pool.set_payout_vault`. `pay_out` decrements pool reserves, increments the season's `payouts_paid` (so `settle_season` still reconciles), and transfers the underlying to the vault. `pay_batch` entries are guardian asserted (`PayoutEntry { policy_id, owner, coverage }`); the one trust critical fact, that the index breached and by how much, is confirmed on chain per entry by the trapping `payout_for` (DR-0026).
 
 ## 6. Error model
 
@@ -199,7 +208,7 @@ Every contract defines exactly one `#[contracterror]` enum. Error codes are numb
 | `policy` | 200 to 299 | `PolicyNotFound` (200), `InvalidState` (201), `WindowStarted` (202), `NotTransferable` (203), `QuoteMismatch` (204), `InvalidCoverage` (205), `InvalidWindow` (206), `NotExpired` (207), `InvalidBatch` (208) |
 | `oracle-adapter` | 300 to 399 | `UnknownPublisher` (300), `BadSignature` (301), `ObservationStale` (302), `Challenged` (303), `RegistryTimelock` (304), `PublisherExists` (305), `NoPendingChange` (306), `PendingExists` (307), `InvalidObservation` (308) |
 | `trigger-engine` | 400 to 499 | `IndexNotFound` (400), `StaleIndex` (401), `AlreadyFinalized` (402), `NotTriggered` (403), `NonDeterministicInput` (404), `InvalidIndexDef` (405) |
-| `payout-vault` | 500 to 599 | `Paused` (500), `BatchComplete` (501), `NoFinalizedTrigger` (502), `PayoutExists` (503) |
+| `payout-vault` | 500 to 599 | `Paused` (500), `BatchComplete` (501), `NoFinalizedTrigger` (502), `PayoutExists` (503), `NothingToClaim` (504), `InvalidBatch` (505), `InvalidEntry` (506) |
 | shared or auth | 900 to 999 | `Unauthorized` (900), `TimelockPending` (901), `NotInitialized` (902), `Overflow` (903) |
 
 Rules: variants carry enough context to debug from an explorer; the README error table is regenerated from source whenever errors change (P1.8.5); a payout or value moving function returns a typed error rather than panicking (NFR-SEC-1). Arithmetic uses checked operations and returns `Overflow` (903) rather than wrapping. The shared 900 to 999 codes are documented once in the `common` crate (`error_codes`); each contract still defines its own `#[contracterror]` enum and includes those variants with these exact numeric values, so a code reads the same from any contract.

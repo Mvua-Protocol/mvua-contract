@@ -76,7 +76,7 @@ The workspace is a set of focused Soroban contract crates plus shared support cr
 | `policy` | Policy certificates and lifecycle | **implemented** (see below) |
 | `oracle-adapter` | Publisher registry, ed25519 signed observations, median aggregation | **implemented** (see below) |
 | `trigger-engine` | Index definitions and deterministic evaluation | **implemented** (see below) |
-| `payout-vault` | Resumable batch payouts to claimable balances, pause | scaffolded |
+| `payout-vault` | Resumable batch payouts to claimable balances, pause | **implemented** (see below) |
 | `test-utils` | Shared test fixtures, scenario builders, mock publishers | shared, in use |
 
 "scaffolded" means the crate compiles with its storage layout (`DataKey`) and error model (`#[contracterror]`) in place and a constructor, with business logic landing in later sprints. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the authoritative storage and error tables.
@@ -129,6 +129,18 @@ The trigger engine turns a season's daily index values into an irreversible payo
 - **Reads**: `index_def`, `trigger_state`, `accumulator`, and `index_count` expose state for the app and indexer.
 
 The challenge window and the index parameters are provisional and governance tunable; the direct `oracle-adapter` median cross call and the payout vault wiring are deferred to the integrated flow sprint (private planning repo, DR-0025).
+
+### payout-vault: what is implemented
+
+The payout vault turns a finalized trigger into money a farmer can collect. Soroban cannot mint a classic Stellar claimable balance, so the vault keeps its own per holder claim ledger and pushes funds on demand, which needs no XLM or signature from the recipient.
+
+- **Guarded funds movement**: money leaves the pool only through the new `risk-pool.pay_out`, which the pool authorizes to the single vault address registered by `set_payout_vault`. It decrements reserves under the solvency invariant and records the amount against the season's `payouts_paid`, so settlement still reconciles.
+- **Resumable batch payouts**: `pay_batch` pays a bounded batch (up to 20) of guardian asserted entries. Each entry is confirmed on chain by `trigger-engine.payout_for`, which traps unless the window is finalized, so no payout fires without finalization. A large region is chunked client side against a per window checkpoint; a policy that already has a payout record is skipped, so an overlapping retry never double pays. `close_batch` seals a window.
+- **Claims**: `claim` pushes a holder's accrued balance to their address and zeroes the ledger before the transfer. It is permissionless and never blocked by the pause flag, so a recorded payout can always be collected.
+- **Emergency pause**: `pause` and `unpause` are guardian only and block new payouts without ever blocking claims (FR-PAY-5).
+- **Reads**: `admin`, `is_paused`, `claimable`, `payout`, and `batch` expose state for the app and indexer.
+
+The guardian asserted entry model (the vault trusts the guardian for a policy's owner and coverage while still gating the payout on the on chain finalization) and the direct on chain policy record read are provisional; see the private planning repo, DR-0026.
 
 <!-- PLACEHOLDER_TAIL -->
 
