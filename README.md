@@ -78,6 +78,7 @@ The workspace is a set of focused Soroban contract crates plus shared support cr
 | `trigger-engine` | Index definitions and deterministic evaluation | **implemented** (see below) |
 | `payout-vault` | Resumable batch payouts to claimable balances, pause | **implemented** (see below) |
 | `test-utils` | Shared test fixtures, scenario builders, mock publishers | shared, in use |
+| `integration-tests` | End to end tests wiring all five contracts through one full season | tests only, in use |
 
 "scaffolded" means the crate compiles with its storage layout (`DataKey`) and error model (`#[contracterror]`) in place and a constructor, with business logic landing in later sprints. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the authoritative storage and error tables.
 
@@ -178,11 +179,12 @@ The toolchain, the `soroban-sdk` version, and every other dependency are pinned 
 | Command | What it runs |
 |---|---|
 | `cargo test --workspace` | Unit and integration tests for all crates |
+| `cargo test -p integration-tests` | End to end test: all five contracts wired through one full season |
 | `cargo clippy --workspace --all-targets -- -D warnings` | Lint gate (warnings deny) |
 | `cargo fmt --all --check` | Format gate |
 | `cargo test --workspace -- --include-ignored testnet` | Testnet integration suite (later in Phase 1) |
 
-Contracts are tested with the Soroban test host, including property style tests over the settlement waterfall so surplus and loss cases stay balanced across the full range of inputs.
+Contracts are tested with the Soroban test host, including property style tests over the settlement waterfall so surplus and loss cases stay balanced across the full range of inputs. The `integration-tests` crate registers all five contracts on one test host, wires them as a deployment would, and drives a full rainfall season from capital and premium intake through signed observations, the on chain oracle median feed, evaluation, finalization after the challenge window, batch payout, and claim, advancing ledger time to clear the publisher timelock and challenge window that a testnet run would wait out in wall clock time.
 
 ## Deployment (testnet)
 
@@ -212,7 +214,8 @@ Deployed testnet contract IDs will be listed here as they go live:
 | Governance, CI, pinned toolchain, design docs | done |
 | Risk pool: capital, seasons, premiums, settlement | done |
 | Policy, oracle adapter, trigger engine, payout vault | in progress |
-| Full lifecycle wired end to end on testnet | planned |
+| Full lifecycle wired end to end in the test host | done (`integration-tests`) |
+| Full lifecycle wired end to end on live testnet | planned |
 | Publisher service and index backtests | planned |
 | Audit preparation and beta season | planned |
 | Mainnet v1.0.0 | planned |
