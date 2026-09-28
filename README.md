@@ -188,7 +188,17 @@ Contracts are tested with the Soroban test host, including property style tests 
 
 ## Deployment (testnet)
 
-Deployment scripts land later in Phase 1. The pattern is:
+The deploy and season scaffold lives in [`scripts/testnet`](./scripts/testnet).
+`deploy.sh` builds, deploys, and wires all five contracts; `season.sh` drives one
+rainfall season as staged steps that wait out the seven day publisher timelock and
+the twenty four hour challenge window. Start with:
+
+```bash
+MVUA_TOKEN=<token-contract-id> SOURCE=<deployer-account> ./scripts/testnet/deploy.sh
+```
+
+then run the season stages in order (see the scaffold's README). The underlying
+CLI pattern each script uses is:
 
 ```bash
 stellar contract deploy \
