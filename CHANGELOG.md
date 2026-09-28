@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-28
+
 ### Added
 
 - `scripts/testnet` deploy and season scaffold (Sprint 1.8, P1.8.6): `deploy.sh` builds, deploys, and wires all five contracts on Stellar testnet with Address only arguments, and `season.sh` drives one rainfall season as named stages that wait out the seven day publisher registry timelock and the twenty four hour challenge window, with placeholders for the complex typed arguments and a note on signing observations off chain; a `README.md` documents the prerequisites and the staged run. This is the deferred live testnet half of Phase 1 exit criterion 1, authored for the owner shell (DR-0028).
