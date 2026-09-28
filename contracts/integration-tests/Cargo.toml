@@ -1,0 +1,29 @@
+# End to end integration tests wiring all five Mvua Protocol contracts on one
+# Soroban test host and driving a full season through the real cross contract
+# calls (P1.8.4). No deployed artifact: this crate exists only for its test
+# target, so the contract crates and the ed25519 signer are dev dependencies.
+[package]
+name = "integration-tests"
+description = "End to end integration tests wiring all five Mvua Protocol contracts through one season."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+test-utils = { path = "../test-utils" }
+risk-pool = { path = "../risk-pool" }
+policy = { path = "../policy" }
+oracle-adapter = { path = "../oracle-adapter" }
+trigger-engine = { path = "../trigger-engine" }
+payout-vault = { path = "../payout-vault" }
+# Signs observation payloads so the oracle `submit` path runs a real ed25519
+# verification, exactly as oracle-adapter's own tests do. Pinned to match the
+# workspace resolution (DR-0019); dev only, never linked into a deployed crate.
+ed25519-dalek = "=2.2.0"
