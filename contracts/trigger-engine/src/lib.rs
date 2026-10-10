@@ -49,7 +49,8 @@ pub enum TriggerStatus {
     /// Breach observed at the given ledger timestamp; challenge window open.
     Triggered(u64),
     /// Finalized at the given timestamp with a severity in basis points.
-    Finalized(u64, Bps),
+    /// Literal u32, not the Bps alias: alias names dangle in the spec (DR-0032).
+    Finalized(u64, u32),
 }
 
 /// Parameters for a new index definition, passed to `create_index` as one
@@ -66,9 +67,10 @@ pub struct IndexParams {
     /// Historical seasonal cumulative baseline (RainfallShortfall).
     pub baseline: i128,
     /// Shortfall trigger threshold in bps (RainfallShortfall).
-    pub trigger_ratio_bps: Bps,
+    /// Literal u32, not the Bps alias (DR-0032): the alias dangles in the spec.
+    pub trigger_ratio_bps: u32,
     /// Full payout threshold in bps, below trigger (RainfallShortfall).
-    pub exhaustion_ratio_bps: Bps,
+    pub exhaustion_ratio_bps: u32,
     /// Run length that fires the index (ConsecutiveDryDays).
     pub trigger_days: u32,
     /// Run length at full payout, above trigger (ConsecutiveDryDays).
@@ -177,7 +179,8 @@ pub struct Finalized {
     pub index_id: u64,
     pub window_id: u64,
     pub at: u64,
-    pub severity: Bps,
+    /// Literal u32, not the Bps alias (DR-0032): the alias dangles in the spec.
+    pub severity: u32,
 }
 
 /// Emitted when the oracle-adapter address is configured. Topic `oracle_set`.
