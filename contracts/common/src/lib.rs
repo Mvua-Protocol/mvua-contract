@@ -25,6 +25,14 @@ pub mod error_codes {
 
 /// Basis points, one hundredth of a percent. 10000 bps == 100 percent.
 /// Used for premium curves, fee caps, and severity fractions.
+///
+/// WARNING: never use this alias as a field or variant type inside a
+/// `#[contracttype]` or `#[contractevent]`. The spec generator records the
+/// alias name as a user-defined type reference rather than resolving it to
+/// `u32`, which produces a dangling `Bps` entry in the contract spec and makes
+/// the Stellar CLI fail to parse that argument ("Missing Entry Bps"). Write
+/// `u32` literally in every externally exposed struct, enum, or event; this
+/// alias is only safe in internal function signatures. See DR-0032.
 pub type Bps = u32;
 
 /// Denominator for basis point math: `value * bps / BPS_DENOMINATOR`.

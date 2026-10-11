@@ -15,6 +15,10 @@
   <b>Parametric climate insurance for the people who feed us, built on <a href="https://stellar.org">Stellar</a> with <a href="https://soroban.stellar.org">Soroban</a>.</b>
 </p>
 
+<p align="center">
+  <a href="https://mvua-site.vercel.app"><b>mvua-site.vercel.app</b></a>
+</p>
+
 Mvua lets smallholder farmers and climate exposed communities buy micro insurance policies in USDC, and pays out automatically when on chain weather data crosses a predefined index trigger. No claims adjusters, no paperwork: a failed season becomes a payout in minutes, not months.
 
 > Status: **pre alpha**, in active development. Contracts are not deployed to mainnet. Everything currently targets Stellar testnet.
