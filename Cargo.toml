@@ -19,6 +19,7 @@ members = [
     "contracts/trigger-engine",
     "contracts/payout-vault",
     "contracts/integration-tests",
+    "contracts/spec-check",
 ]
 
 [workspace.package]

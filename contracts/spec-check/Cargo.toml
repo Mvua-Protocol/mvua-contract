@@ -1,0 +1,19 @@
+# Host only CI tool: reads the `contractspecv0` section of each built contract
+# wasm and fails when the spec references a user-defined type it never defines
+# (the "Missing Entry Bps" class of bug, DR-0032). Never deployed and never
+# built for wasm; `scripts/check-specs.sh` builds the contracts and runs it.
+[package]
+name = "spec-check"
+description = "CI guard that every user-defined type referenced in a contract spec is defined in that spec."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+# Pinned to the versions soroban-sdk already resolves to in Cargo.lock, so this
+# tool parses the spec with the same XDR definitions the SDK emits.
+soroban-spec = "=23.5.3"
+stellar-xdr = { version = "=23.0.0", default-features = false, features = ["curr", "std"] }
