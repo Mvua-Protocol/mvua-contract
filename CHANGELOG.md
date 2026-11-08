@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+
+- `cargo-deny` ignores RUSTSEC-2026-0387 (`crypto-bigint` 0.5.5 timing variability) with a recorded rationale: the crate is reached only through `soroban-env-host`, the native test and simulation host, and is absent from every deployed `wasm32v1-none` contract; the only fix (0.7.6) needs a `soroban-sdk` major upgrade, tracked to remove the ignore (DR-0034).
+
 ## [0.2.0] - 2026-09-28
 
 ### Added

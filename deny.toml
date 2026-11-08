@@ -10,6 +10,12 @@ yanked = "deny"
 ignore = [
     "RUSTSEC-2024-0436", # paste 1.0.15 is unmaintained (via soroban-sdk)
     "RUSTSEC-2024-0388", # derivative 2.2.0 is unmaintained (via arkworks)
+    # crypto-bigint 0.5.5 constant-time timing issues, fixed only in 0.7.6. It is
+    # reached solely through soroban-env-host (k256/p256 via elliptic-curve 0.13,
+    # which cannot take 0.7), the native test and simulation host. No deployed
+    # wasm32v1-none contract links it. Remove on the soroban-sdk major that moves
+    # off elliptic-curve 0.13 (DR-0034).
+    "RUSTSEC-2026-0387",
 ]
 
 [licenses]
