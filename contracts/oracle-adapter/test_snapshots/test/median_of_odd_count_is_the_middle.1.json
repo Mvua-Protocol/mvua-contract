@@ -349,7 +349,7 @@
             "key": {
               "vec": [
                 {
-                  "symbol": "Obs"
+                  "symbol": "Latest"
                 },
                 {
                   "symbol": "nairobi"
@@ -358,7 +358,7 @@
                   "symbol": "rain_mm"
                 },
                 {
-                  "u32": 0
+                  "bytes": "43046bfe4092b3e94994eada15dcc20d8aaa07b658fd3954eb8e0efb8bdca5de"
                 }
               ]
             },
@@ -375,7 +375,7 @@
                 "key": {
                   "vec": [
                     {
-                      "symbol": "Obs"
+                      "symbol": "Latest"
                     },
                     {
                       "symbol": "nairobi"
@@ -384,97 +384,7 @@
                       "symbol": "rain_mm"
                     },
                     {
-                      "u32": 0
-                    }
-                  ]
-                },
-                "durability": "persistent",
-                "val": {
-                  "map": [
-                    {
-                      "key": {
-                        "symbol": "accepted"
-                      },
-                      "val": {
-                        "bool": true
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "publisher"
-                      },
-                      "val": {
-                        "bytes": "acdb0e29743f0ccb8686d0a104cb96e05abefec1538765e7595869f7dc8c49aa"
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "timestamp"
-                      },
-                      "val": {
-                        "u64": "1814403"
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "value"
-                      },
-                      "val": {
-                        "i128": "10"
-                      }
-                    }
-                  ]
-                }
-              }
-            },
-            "ext": "v0"
-          },
-          1555200
-        ]
-      ],
-      [
-        {
-          "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
-            "key": {
-              "vec": [
-                {
-                  "symbol": "Obs"
-                },
-                {
-                  "symbol": "nairobi"
-                },
-                {
-                  "symbol": "rain_mm"
-                },
-                {
-                  "u32": 1
-                }
-              ]
-            },
-            "durability": "persistent"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
-                "key": {
-                  "vec": [
-                    {
-                      "symbol": "Obs"
-                    },
-                    {
-                      "symbol": "nairobi"
-                    },
-                    {
-                      "symbol": "rain_mm"
-                    },
-                    {
-                      "u32": 1
+                      "bytes": "43046bfe4092b3e94994eada15dcc20d8aaa07b658fd3954eb8e0efb8bdca5de"
                     }
                   ]
                 },
@@ -529,7 +439,7 @@
             "key": {
               "vec": [
                 {
-                  "symbol": "Obs"
+                  "symbol": "Latest"
                 },
                 {
                   "symbol": "nairobi"
@@ -538,7 +448,7 @@
                   "symbol": "rain_mm"
                 },
                 {
-                  "u32": 2
+                  "bytes": "4ed32f63bf35f0eeefcb25f28a2e1fbdc873ae2835671b0c9460f5f12e4556a8"
                 }
               ]
             },
@@ -555,7 +465,7 @@
                 "key": {
                   "vec": [
                     {
-                      "symbol": "Obs"
+                      "symbol": "Latest"
                     },
                     {
                       "symbol": "nairobi"
@@ -564,7 +474,7 @@
                       "symbol": "rain_mm"
                     },
                     {
-                      "u32": 2
+                      "bytes": "4ed32f63bf35f0eeefcb25f28a2e1fbdc873ae2835671b0c9460f5f12e4556a8"
                     }
                   ]
                 },
@@ -619,13 +529,16 @@
             "key": {
               "vec": [
                 {
-                  "symbol": "ObsHead"
+                  "symbol": "Latest"
                 },
                 {
                   "symbol": "nairobi"
                 },
                 {
                   "symbol": "rain_mm"
+                },
+                {
+                  "bytes": "acdb0e29743f0ccb8686d0a104cb96e05abefec1538765e7595869f7dc8c49aa"
                 }
               ]
             },
@@ -642,13 +555,16 @@
                 "key": {
                   "vec": [
                     {
-                      "symbol": "ObsHead"
+                      "symbol": "Latest"
                     },
                     {
                       "symbol": "nairobi"
                     },
                     {
                       "symbol": "rain_mm"
+                    },
+                    {
+                      "bytes": "acdb0e29743f0ccb8686d0a104cb96e05abefec1538765e7595869f7dc8c49aa"
                     }
                   ]
                 },
@@ -657,18 +573,34 @@
                   "map": [
                     {
                       "key": {
-                        "symbol": "count"
+                        "symbol": "accepted"
                       },
                       "val": {
-                        "u32": 3
+                        "bool": true
                       }
                     },
                     {
                       "key": {
-                        "symbol": "next_seq"
+                        "symbol": "publisher"
                       },
                       "val": {
-                        "u32": 3
+                        "bytes": "acdb0e29743f0ccb8686d0a104cb96e05abefec1538765e7595869f7dc8c49aa"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "timestamp"
+                      },
+                      "val": {
+                        "u64": "1814403"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "value"
+                      },
+                      "val": {
+                        "i128": "10"
                       }
                     }
                   ]
@@ -856,6 +788,67 @@
                       "val": {
                         "u64": "604801"
                       }
+                    }
+                  ]
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          1555200
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+            "key": {
+              "vec": [
+                {
+                  "symbol": "Reporters"
+                },
+                {
+                  "symbol": "nairobi"
+                },
+                {
+                  "symbol": "rain_mm"
+                }
+              ]
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+                "key": {
+                  "vec": [
+                    {
+                      "symbol": "Reporters"
+                    },
+                    {
+                      "symbol": "nairobi"
+                    },
+                    {
+                      "symbol": "rain_mm"
+                    }
+                  ]
+                },
+                "durability": "persistent",
+                "val": {
+                  "vec": [
+                    {
+                      "bytes": "acdb0e29743f0ccb8686d0a104cb96e05abefec1538765e7595869f7dc8c49aa"
+                    },
+                    {
+                      "bytes": "43046bfe4092b3e94994eada15dcc20d8aaa07b658fd3954eb8e0efb8bdca5de"
+                    },
+                    {
+                      "bytes": "4ed32f63bf35f0eeefcb25f28a2e1fbdc873ae2835671b0c9460f5f12e4556a8"
                     }
                   ]
                 }

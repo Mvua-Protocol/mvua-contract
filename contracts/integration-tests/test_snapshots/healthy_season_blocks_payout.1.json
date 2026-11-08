@@ -2445,7 +2445,7 @@
             "key": {
               "vec": [
                 {
-                  "symbol": "Obs"
+                  "symbol": "Latest"
                 },
                 {
                   "symbol": "KE_NAK"
@@ -2454,7 +2454,7 @@
                   "symbol": "rain_mm"
                 },
                 {
-                  "u32": 0
+                  "bytes": "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c"
                 }
               ]
             },
@@ -2471,7 +2471,7 @@
                 "key": {
                   "vec": [
                     {
-                      "symbol": "Obs"
+                      "symbol": "Latest"
                     },
                     {
                       "symbol": "KE_NAK"
@@ -2480,97 +2480,7 @@
                       "symbol": "rain_mm"
                     },
                     {
-                      "u32": 0
-                    }
-                  ]
-                },
-                "durability": "persistent",
-                "val": {
-                  "map": [
-                    {
-                      "key": {
-                        "symbol": "accepted"
-                      },
-                      "val": {
-                        "bool": true
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "publisher"
-                      },
-                      "val": {
-                        "bytes": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1"
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "timestamp"
-                      },
-                      "val": {
-                        "u64": "604801"
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "value"
-                      },
-                      "val": {
-                        "i128": "250"
-                      }
-                    }
-                  ]
-                }
-              }
-            },
-            "ext": "v0"
-          },
-          1555200
-        ]
-      ],
-      [
-        {
-          "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
-            "key": {
-              "vec": [
-                {
-                  "symbol": "Obs"
-                },
-                {
-                  "symbol": "KE_NAK"
-                },
-                {
-                  "symbol": "rain_mm"
-                },
-                {
-                  "u32": 1
-                }
-              ]
-            },
-            "durability": "persistent"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
-                "key": {
-                  "vec": [
-                    {
-                      "symbol": "Obs"
-                    },
-                    {
-                      "symbol": "KE_NAK"
-                    },
-                    {
-                      "symbol": "rain_mm"
-                    },
-                    {
-                      "u32": 1
+                      "bytes": "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c"
                     }
                   ]
                 },
@@ -2625,13 +2535,16 @@
             "key": {
               "vec": [
                 {
-                  "symbol": "ObsHead"
+                  "symbol": "Latest"
                 },
                 {
                   "symbol": "KE_NAK"
                 },
                 {
                   "symbol": "rain_mm"
+                },
+                {
+                  "bytes": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1"
                 }
               ]
             },
@@ -2648,13 +2561,16 @@
                 "key": {
                   "vec": [
                     {
-                      "symbol": "ObsHead"
+                      "symbol": "Latest"
                     },
                     {
                       "symbol": "KE_NAK"
                     },
                     {
                       "symbol": "rain_mm"
+                    },
+                    {
+                      "bytes": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1"
                     }
                   ]
                 },
@@ -2663,18 +2579,34 @@
                   "map": [
                     {
                       "key": {
-                        "symbol": "count"
+                        "symbol": "accepted"
                       },
                       "val": {
-                        "u32": 2
+                        "bool": true
                       }
                     },
                     {
                       "key": {
-                        "symbol": "next_seq"
+                        "symbol": "publisher"
                       },
                       "val": {
-                        "u32": 2
+                        "bytes": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "timestamp"
+                      },
+                      "val": {
+                        "u64": "604801"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "value"
+                      },
+                      "val": {
+                        "i128": "250"
                       }
                     }
                   ]
@@ -2800,6 +2732,64 @@
                       "val": {
                         "u64": "604801"
                       }
+                    }
+                  ]
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          1555200
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+            "key": {
+              "vec": [
+                {
+                  "symbol": "Reporters"
+                },
+                {
+                  "symbol": "KE_NAK"
+                },
+                {
+                  "symbol": "rain_mm"
+                }
+              ]
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+                "key": {
+                  "vec": [
+                    {
+                      "symbol": "Reporters"
+                    },
+                    {
+                      "symbol": "KE_NAK"
+                    },
+                    {
+                      "symbol": "rain_mm"
+                    }
+                  ]
+                },
+                "durability": "persistent",
+                "val": {
+                  "vec": [
+                    {
+                      "bytes": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1"
+                    },
+                    {
+                      "bytes": "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c"
                     }
                   ]
                 }
