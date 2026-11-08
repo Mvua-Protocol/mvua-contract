@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `trigger-engine` contract spec referenced the `Bps` type alias without defining it, so the Stellar CLI could not parse `IndexParams` ("Missing Entry Bps") and `create_index` was uncallable from the CLI. The four spec exposed positions (`IndexParams.trigger_ratio_bps`, `IndexParams.exhaustion_ratio_bps`, `TriggerStatus::Finalized`, and the `Finalized` event's `severity`) now spell `u32` literally; no logic change (DR-0032).
 - `scripts/testnet/addresses.env`, the per deploy state written by `deploy.sh`, is now git ignored.
 
+### Security
+
+- `cargo-deny` ignores RUSTSEC-2026-0387 (`crypto-bigint` 0.5.5 timing variability) with a recorded rationale: the crate is reached only through `soroban-env-host`, the native test and simulation host, and is absent from every deployed `wasm32v1-none` contract; the only fix (0.7.6) needs a `soroban-sdk` major upgrade, tracked to remove the ignore (DR-0034).
+
 ## [0.2.0] - 2026-09-28
 
 ### Added
