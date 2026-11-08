@@ -21,6 +21,7 @@ jobs:
         with:
           toolchain: 1.97.1
           components: rustfmt, clippy
+          targets: wasm32v1-none
 
       - name: Confirm toolchain pin
         run: cargo --version && rustc --version
@@ -69,6 +70,16 @@ jobs:
             echo "No contract crates yet (Phase 0); test gate activates with the first crate in Phase 1."
           else
             cargo test --workspace
+          fi
+
+      - name: Contract spec integrity
+        # Builds each contract to wasm and fails if its spec references a type
+        # it never defines (a leaked type alias, DR-0032).
+        run: |
+          if [ "${{ steps.crates.outputs.count }}" -eq 0 ]; then
+            echo "No contract crates yet (Phase 0); spec gate activates with the first crate in Phase 1."
+          else
+            bash scripts/check-specs.sh
           fi
 
   audit:
