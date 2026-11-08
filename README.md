@@ -116,12 +116,12 @@ The premium curve is a documented placeholder pending calibration against the in
 The oracle adapter is the protocol's trust boundary for external weather data. The trigger engine will consume only the trusted median it produces, never a raw observation.
 
 - **Publisher registry**: `propose_publisher`, `execute_publisher`, and `cancel_publisher` add or remove a publisher's ed25519 key behind a timelock, so guardians have a cancellation window against a compromised key. A removal deactivates the key rather than deleting it, so past observations keep a resolvable author.
-- **Signed ingestion**: `submit` authenticates an observation by verifying an ed25519 signature over the observation payload, not by a Stellar account signature, so a weather station never needs an on chain account. A negative value or a future timestamp is rejected, and a forged signature fails verification.
-- **Trusted median**: `median` returns the median over accepted, unchallenged, and fresh observations, but only when at least two distinct publishers are represented and the data is within the staleness bound (default 48 hours). Otherwise it reports the index as stale, so a payout can only fire on data that is both fresh and corroborated.
-- **Challenge**: guardians may `challenge` and `unchallenge` a stored observation to exclude it from the median.
-- **Reads**: `is_publisher`, `publisher_info`, `pending_publisher`, `observation`, `head`, `is_challenged`, and `staleness_bound` expose state for the app and indexer.
+- **Signed ingestion**: `submit` authenticates an observation by verifying an ed25519 signature over the observation payload, not by a Stellar account signature, so a weather station never needs an on chain account. A negative value or a future timestamp is rejected, and a forged signature fails verification. Each publisher's timestamps must strictly increase per region and metric, so a signed observation is accepted at most once and cannot be replayed.
+- **Trusted median**: `median` takes one value per active publisher, its latest accepted, unchallenged, and fresh observation, and returns their median only when at least two distinct publishers are represented and the data is within the staleness bound (default 48 hours). Otherwise it reports the index as stale, so a payout can only fire on data that is both fresh and corroborated, and no publisher gains weight by submitting more often.
+- **Challenge**: guardians may `challenge` and `unchallenge` a publisher's latest observation to exclude it from the median.
+- **Reads**: `is_publisher`, `publisher_info`, `pending_publisher`, `observation`, `reporters`, `is_challenged`, and `staleness_bound` expose state for the app and indexer.
 
-The ring size, minimum publisher count, staleness bound, and registry timelock are provisional and governance tunable, pending calibration on testnet (private planning repo, DR-0024).
+The reporter cap, minimum publisher count, staleness bound, and registry timelock are provisional and governance tunable, pending calibration on testnet (private planning repo, DR-0024).
 
 ### trigger-engine: what is implemented
 

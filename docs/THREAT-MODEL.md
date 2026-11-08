@@ -68,10 +68,10 @@ Numbered `T-n`. Each maps to the requirements that mitigate it and the tests tha
 ### 4.2 Oracle and data integrity
 
 - **T-5 Forged observation.** Adversary submits an observation as a publisher they do not control. Mitigation: ed25519 verification against the registry; `BadSignature` (301), `UnknownPublisher` (300) (FR-ORC-1, FR-ORC-2).
-- **T-6 Single publisher manipulation.** One malicious publisher pushes a false value. Mitigation: median aggregation over N valid observations from independent publishers dilutes a single outlier (FR-ORC-3); multi publisher test harness (P2.3).
+- **T-6 Single publisher manipulation.** One malicious publisher pushes a false value. Mitigation: median aggregation over one valid observation per active publisher dilutes a single outlier, and submitting more often buys a publisher no extra weight (FR-ORC-3, DR-0035); multi publisher test harness (P2.3).
 - **T-7 Majority publisher collusion.** Enough publishers collude to move the median. Mitigation: guardian challenge window before finalization (FR-ORC-5); publisher rotation and removal via timelocked admin (FR-ORC-1); this residual risk is tracked and reduced by growing publisher independence (Phase 8 governance).
 - **T-8 Stale data trigger.** A gap in data lets an old value drive a trigger. Mitigation: staleness bound marks the index stale and blocks triggers; fail safe, not fail open (FR-ORC-4); `StaleIndex` (401).
-- **T-9 Replay or duplicate submission.** The same observation is counted twice to skew the median. Mitigation: append only sequence per region and metric with de duplication on (publisher, timestamp); accepted flag prevents double counting.
+- **T-9 Replay or duplicate submission.** Anyone resubmits a publisher's public signed observation to count it many times, skewing the median or crowding other publishers out of it. Mitigation: each publisher's timestamps must strictly increase per region and metric, so a signed payload is accepted at most once (`ReplayedObservation` 309); only a publisher's latest observation is kept, and `median` takes at most one value per active publisher, so neither replays nor frequent submissions add weight or evict other publishers (DR-0035).
 
 ### 4.3 Trigger and payout
 

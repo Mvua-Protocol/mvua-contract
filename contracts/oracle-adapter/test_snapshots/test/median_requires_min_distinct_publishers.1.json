@@ -242,7 +242,7 @@
             "key": {
               "vec": [
                 {
-                  "symbol": "Obs"
+                  "symbol": "Latest"
                 },
                 {
                   "symbol": "nairobi"
@@ -251,7 +251,7 @@
                   "symbol": "rain_mm"
                 },
                 {
-                  "u32": 0
+                  "bytes": "20828bf5c5bdcacb684863336c202fb5599da48be5596615742170705beca9f7"
                 }
               ]
             },
@@ -268,7 +268,7 @@
                 "key": {
                   "vec": [
                     {
-                      "symbol": "Obs"
+                      "symbol": "Latest"
                     },
                     {
                       "symbol": "nairobi"
@@ -277,7 +277,7 @@
                       "symbol": "rain_mm"
                     },
                     {
-                      "u32": 0
+                      "bytes": "20828bf5c5bdcacb684863336c202fb5599da48be5596615742170705beca9f7"
                     }
                   ]
                 },
@@ -332,7 +332,7 @@
             "key": {
               "vec": [
                 {
-                  "symbol": "Obs"
+                  "symbol": "Latest"
                 },
                 {
                   "symbol": "nairobi"
@@ -341,7 +341,7 @@
                   "symbol": "rain_mm"
                 },
                 {
-                  "u32": 1
+                  "bytes": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da"
                 }
               ]
             },
@@ -358,7 +358,7 @@
                 "key": {
                   "vec": [
                     {
-                      "symbol": "Obs"
+                      "symbol": "Latest"
                     },
                     {
                       "symbol": "nairobi"
@@ -367,7 +367,7 @@
                       "symbol": "rain_mm"
                     },
                     {
-                      "u32": 1
+                      "bytes": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da"
                     }
                   ]
                 },
@@ -404,74 +404,6 @@
                       },
                       "val": {
                         "i128": "200"
-                      }
-                    }
-                  ]
-                }
-              }
-            },
-            "ext": "v0"
-          },
-          1555200
-        ]
-      ],
-      [
-        {
-          "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
-            "key": {
-              "vec": [
-                {
-                  "symbol": "ObsHead"
-                },
-                {
-                  "symbol": "nairobi"
-                },
-                {
-                  "symbol": "rain_mm"
-                }
-              ]
-            },
-            "durability": "persistent"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
-                "key": {
-                  "vec": [
-                    {
-                      "symbol": "ObsHead"
-                    },
-                    {
-                      "symbol": "nairobi"
-                    },
-                    {
-                      "symbol": "rain_mm"
-                    }
-                  ]
-                },
-                "durability": "persistent",
-                "val": {
-                  "map": [
-                    {
-                      "key": {
-                        "symbol": "count"
-                      },
-                      "val": {
-                        "u32": 2
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "next_seq"
-                      },
-                      "val": {
-                        "u32": 2
                       }
                     }
                   ]
@@ -597,6 +529,64 @@
                       "val": {
                         "u64": "1209602"
                       }
+                    }
+                  ]
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          1555200
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+            "key": {
+              "vec": [
+                {
+                  "symbol": "Reporters"
+                },
+                {
+                  "symbol": "nairobi"
+                },
+                {
+                  "symbol": "rain_mm"
+                }
+              ]
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+                "key": {
+                  "vec": [
+                    {
+                      "symbol": "Reporters"
+                    },
+                    {
+                      "symbol": "nairobi"
+                    },
+                    {
+                      "symbol": "rain_mm"
+                    }
+                  ]
+                },
+                "durability": "persistent",
+                "val": {
+                  "vec": [
+                    {
+                      "bytes": "20828bf5c5bdcacb684863336c202fb5599da48be5596615742170705beca9f7"
+                    },
+                    {
+                      "bytes": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da"
                     }
                   ]
                 }

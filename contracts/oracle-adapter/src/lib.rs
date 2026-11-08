@@ -2,11 +2,15 @@
 //! oracle-adapter: the trust boundary for external data.
 //!
 //! Registers publishers behind a timelock, ingests ed25519 signed weather
-//! observations into a per region and metric ring, aggregates a median over the
-//! valid, unchallenged, fresh observations, and enforces two fail safe gates: a
-//! staleness bound and a minimum number of distinct publishers. The
-//! trigger-engine consumes only the already trusted median from `median`; it
-//! never sees a raw observation.
+//! observations as one latest observation per publisher for each region and
+//! metric, aggregates a median over at most one valid, unchallenged, fresh value
+//! per active publisher, and enforces two fail safe gates: a staleness bound and
+//! a minimum number of distinct publishers. The trigger-engine consumes only the
+//! already trusted median from `median`; it never sees a raw observation.
+//!
+//! Replay safety (DR-0035): each publisher's timestamps must strictly increase
+//! per region and metric, so a signed payload is accepted at most once, and a
+//! publisher holds a single sample in the median however often it submits.
 //!
 //! Trust model: a submission is authenticated by an ed25519 signature over the
 //! XDR of an `ObservationPayload`, not by `require_auth`, so an off-chain
@@ -26,10 +30,13 @@ use soroban_sdk::{
     BytesN, Env, Symbol, Vec,
 };
 
-/// Observations retained per region and metric. The ring overwrites its oldest
-/// slot once full; `median` reads at most this many observations. Provisional
-/// (INDEX-SPEC), tunable by governance in a later sprint.
-const RING_SIZE: u32 = 16;
+/// Distinct publishers that can report for one region and metric. Each holds a
+/// single latest observation, so `median` reads at most this many values and
+/// its cost stays bounded. When the list is full, removed publishers are
+/// dropped from it to make room; a new reporter is rejected with
+/// `TooManyReporters` (310) only if every listed publisher is still active.
+/// Provisional, governance tunable.
+const MAX_REPORTERS: u32 = 16;
 
 /// Minimum distinct publishers among the valid observations for `median` to
 /// return a value. Below this the index is stale (fail safe): one publisher can
@@ -60,12 +67,16 @@ pub enum DataKey {
     Publisher(BytesN<32>),
     /// A pending, timelocked registry change for a publisher key.
     PendingPublisher(BytesN<32>),
-    /// A single observation in the ring, keyed by region, metric, ring slot.
-    Obs(Symbol, Symbol, u32),
-    /// Ring cursor: next sequence and current count for a region and metric.
-    ObsHead(Symbol, Symbol),
-    /// A guardian challenge flag on a ring slot; the value is the reason code.
-    Challenge(Symbol, Symbol, u32),
+    /// A publisher's latest observation for a region and metric. A newer
+    /// submission replaces it; an older or equal timestamp is a replay.
+    Latest(Symbol, Symbol, BytesN<32>),
+    /// The publishers that have reported for a region and metric, in first
+    /// report order; bounded by `MAX_REPORTERS`.
+    Reporters(Symbol, Symbol),
+    /// A guardian challenge flag on a publisher's latest observation for a
+    /// region and metric; the value is the reason code. A newer submission
+    /// from that publisher clears it.
+    Challenge(Symbol, Symbol, BytesN<32>),
     /// Accrued fees owed to a publisher. Reserved for P1.6.5, unused in 1.6.
     PublisherFee(BytesN<32>),
     /// Staleness threshold in hours. Instance durability (fail safe, FR-ORC-4).
@@ -102,15 +113,6 @@ pub struct Observation {
     pub accepted: bool,
 }
 
-/// Ring cursor for a region and metric. `next_seq` increments on every write;
-/// the slot is `next_seq % RING_SIZE`. `count` caps at `RING_SIZE`.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Head {
-    pub next_seq: u32,
-    pub count: u32,
-}
-
 /// The signed payload. A publisher signs the XDR of this struct; `submit`
 /// reconstructs the identical bytes and verifies the signature over them. Field
 /// order and types are consensus critical: changing them breaks every signer.
@@ -138,6 +140,12 @@ pub enum Error {
     NoPendingChange = 306,
     PendingExists = 307,
     InvalidObservation = 308,
+    /// The timestamp is not newer than the publisher's latest accepted
+    /// observation for this region and metric: a replay or an out of order
+    /// submission (DR-0035).
+    ReplayedObservation = 309,
+    /// A new publisher would exceed `MAX_REPORTERS` for this region and metric.
+    TooManyReporters = 310,
     Unauthorized = 900,
     TimelockPending = 901,
     NotInitialized = 902,
@@ -171,22 +179,23 @@ pub struct PublisherProposalCancelled {
     pub publisher: BytesN<32>,
 }
 
-/// Emitted when an observation is accepted. Topic `observation`; data locates
-/// the ring slot and names the publisher.
+/// Emitted when an observation is accepted. Topic `observation`; data names the
+/// publisher and the observation's timestamp.
 #[contractevent(topics = ["observation"], data_format = "map")]
 pub struct ObservationSubmitted {
     pub region: Symbol,
     pub metric: Symbol,
-    pub seq: u32,
     pub publisher: BytesN<32>,
+    pub timestamp: u64,
 }
 
-/// Emitted when a guardian challenges a slot. Topic `challenge`.
+/// Emitted when a guardian challenges a publisher's latest observation. Topic
+/// `challenge`.
 #[contractevent(topics = ["challenge"], data_format = "map")]
 pub struct ObservationChallenged {
     pub region: Symbol,
     pub metric: Symbol,
-    pub seq: u32,
+    pub publisher: BytesN<32>,
     pub reason: u32,
 }
 
@@ -195,7 +204,7 @@ pub struct ObservationChallenged {
 pub struct ObservationUnchallenged {
     pub region: Symbol,
     pub metric: Symbol,
-    pub seq: u32,
+    pub publisher: BytesN<32>,
 }
 
 #[contract]
@@ -317,11 +326,14 @@ impl OracleAdapter {
     /// signature over the XDR of `ObservationPayload { region, metric,
     /// timestamp, value }` authenticates the submission, so a publisher needs
     /// no Stellar account. `UnknownPublisher` (300) if the key is not active;
-    /// `InvalidObservation` (308) for a negative value or a future timestamp. A
-    /// forged signature traps in `ed25519_verify` (surfaces to a `try_` caller
-    /// as a host error). On success the observation is written into the ring
-    /// slot `next_seq % RING_SIZE`, any stale challenge on the reused slot is
-    /// cleared, and the ring cursor advances. Returns the written slot.
+    /// `InvalidObservation` (308) for a negative value or a future timestamp;
+    /// `ReplayedObservation` (309) unless the timestamp is strictly newer than
+    /// this publisher's latest accepted observation for the region and metric,
+    /// so a signed payload is accepted at most once (DR-0035);
+    /// `TooManyReporters` (310) if a first report would exceed `MAX_REPORTERS`.
+    /// A forged signature traps in `ed25519_verify` (surfaces to a `try_` caller
+    /// as a host error). On success the observation replaces the publisher's
+    /// latest one and clears any challenge on it.
     pub fn submit(
         env: Env,
         region: Symbol,
@@ -330,7 +342,7 @@ impl OracleAdapter {
         value: i128,
         publisher: BytesN<32>,
         signature: BytesN<64>,
-    ) -> Result<u32, Error> {
+    ) -> Result<(), Error> {
         let info = read_publisher(&env, &publisher).ok_or(Error::UnknownPublisher)?;
         if !info.active {
             return Err(Error::UnknownPublisher);
@@ -349,11 +361,36 @@ impl OracleAdapter {
         env.crypto()
             .ed25519_verify(&publisher, &message, &signature);
 
-        let mut head = read_head(&env, &region, &metric);
-        let slot = head.next_seq % RING_SIZE;
+        if let Some(latest) = read_latest(&env, &region, &metric, &publisher) {
+            if timestamp <= latest.timestamp {
+                return Err(Error::ReplayedObservation);
+            }
+        }
+        let reporters_key = DataKey::Reporters(region.clone(), metric.clone());
+        let mut reporters = read_reporters(&env, &region, &metric);
+        if !reporters.contains(&publisher) {
+            if reporters.len() >= MAX_REPORTERS {
+                // Removed publishers never count in the median; free their places.
+                let mut active = Vec::new(&env);
+                for p in reporters.iter() {
+                    if read_publisher(&env, &p).map(|i| i.active).unwrap_or(false) {
+                        active.push_back(p);
+                    }
+                }
+                reporters = active;
+            }
+            if reporters.len() >= MAX_REPORTERS {
+                return Err(Error::TooManyReporters);
+            }
+            reporters.push_back(publisher.clone());
+            env.storage().persistent().set(&reporters_key, &reporters);
+        }
+        // Extend on every submission, not only on a new reporter, so the list
+        // `median` reads never expires under a steady set of publishers.
+        extend_persistent_ttl(&env, &reporters_key);
         write_persistent(
             &env,
-            &DataKey::Obs(region.clone(), metric.clone(), slot),
+            &DataKey::Latest(region.clone(), metric.clone(), publisher.clone()),
             &Observation {
                 value,
                 timestamp,
@@ -364,55 +401,48 @@ impl OracleAdapter {
         env.storage().persistent().remove(&DataKey::Challenge(
             region.clone(),
             metric.clone(),
-            slot,
+            publisher.clone(),
         ));
-        head.next_seq = head.next_seq.checked_add(1).ok_or(Error::Overflow)?;
-        if head.count < RING_SIZE {
-            head.count += 1;
-        }
-        write_persistent(
-            &env,
-            &DataKey::ObsHead(region.clone(), metric.clone()),
-            &head,
-        );
         extend_instance_ttl(&env);
         ObservationSubmitted {
             region,
             metric,
-            seq: slot,
             publisher,
+            timestamp,
         }
         .publish(&env);
-        Ok(slot)
+        Ok(())
     }
 
-    /// Flag a ring slot so `median` excludes it (FR-ORC-5). Guardian only.
-    /// `InvalidObservation` (308) if the slot holds no observation; `Challenged`
-    /// (303) if it is already flagged.
+    /// Flag a publisher's latest observation so `median` excludes it
+    /// (FR-ORC-5). Guardian only. `InvalidObservation` (308) if the publisher
+    /// has no observation for the region and metric; `Challenged` (303) if it
+    /// is already flagged. A newer submission from the publisher clears the
+    /// flag, since it replaces the challenged value.
     pub fn challenge(
         env: Env,
         region: Symbol,
         metric: Symbol,
-        seq: u32,
+        publisher: BytesN<32>,
         reason: u32,
     ) -> Result<(), Error> {
         require_admin(&env)?;
-        if read_obs(&env, &region, &metric, seq).is_none() {
+        if read_latest(&env, &region, &metric, &publisher).is_none() {
             return Err(Error::InvalidObservation);
         }
-        if is_challenged(&env, &region, &metric, seq) {
+        if is_challenged(&env, &region, &metric, &publisher) {
             return Err(Error::Challenged);
         }
         write_persistent(
             &env,
-            &DataKey::Challenge(region.clone(), metric.clone(), seq),
+            &DataKey::Challenge(region.clone(), metric.clone(), publisher.clone()),
             &reason,
         );
         extend_instance_ttl(&env);
         ObservationChallenged {
             region,
             metric,
-            seq,
+            publisher,
             reason,
         }
         .publish(&env);
@@ -420,57 +450,64 @@ impl OracleAdapter {
     }
 
     /// Clear a challenge flag (FR-ORC-5). Guardian only. `NoPendingChange` is
-    /// not reused here: clearing an unflagged slot is a no-op that still emits,
-    /// so a guardian retry is idempotent.
-    pub fn unchallenge(env: Env, region: Symbol, metric: Symbol, seq: u32) -> Result<(), Error> {
+    /// not reused here: clearing an unflagged observation is a no-op that still
+    /// emits, so a guardian retry is idempotent.
+    pub fn unchallenge(
+        env: Env,
+        region: Symbol,
+        metric: Symbol,
+        publisher: BytesN<32>,
+    ) -> Result<(), Error> {
         require_admin(&env)?;
-        env.storage()
-            .persistent()
-            .remove(&DataKey::Challenge(region.clone(), metric.clone(), seq));
+        env.storage().persistent().remove(&DataKey::Challenge(
+            region.clone(),
+            metric.clone(),
+            publisher.clone(),
+        ));
         extend_instance_ttl(&env);
         ObservationUnchallenged {
             region,
             metric,
-            seq,
+            publisher,
         }
         .publish(&env);
         Ok(())
     }
 
     /// The trusted median over the valid observations for a region and metric
-    /// (FR-ORC-3, FR-ORC-4). An observation counts only if it is accepted, not
-    /// challenged, and no older than the staleness bound. Returns
-    /// `ObservationStale` (302) when no observation qualifies or fewer than
-    /// `MIN_PUBLISHERS` distinct publishers are represented, so a stale or
-    /// under-sourced index blocks a trigger rather than paying on thin data.
+    /// (FR-ORC-3, FR-ORC-4). Each publisher contributes at most one value, its
+    /// latest observation, and only if the publisher is still active and the
+    /// observation is accepted, not challenged, and no older than the staleness
+    /// bound; so submitting more often never buys a publisher more weight
+    /// (DR-0035). Returns `ObservationStale` (302) when fewer than
+    /// `MIN_PUBLISHERS` values qualify, so a stale or under-sourced index blocks
+    /// a trigger rather than paying on thin data.
     pub fn median(env: Env, region: Symbol, metric: Symbol) -> Result<i128, Error> {
-        let head = read_head(&env, &region, &metric);
-        if head.count == 0 {
-            return Err(Error::ObservationStale);
-        }
         let now = env.ledger().timestamp();
         let bound_secs = read_staleness_hours(&env)
             .checked_mul(SECONDS_PER_HOUR)
             .ok_or(Error::Overflow)?;
 
-        let mut values = [0i128; RING_SIZE as usize];
+        let mut values = [0i128; MAX_REPORTERS as usize];
         let mut len: usize = 0;
-        let mut publishers: Vec<BytesN<32>> = Vec::new(&env);
-        let mut slot: u32 = 0;
-        while slot < head.count {
-            if let Some(obs) = read_obs(&env, &region, &metric, slot) {
+        for publisher in read_reporters(&env, &region, &metric).iter() {
+            let active = read_publisher(&env, &publisher)
+                .map(|p| p.active)
+                .unwrap_or(false);
+            if !active || is_challenged(&env, &region, &metric, &publisher) {
+                continue;
+            }
+            if let Some(obs) = read_latest(&env, &region, &metric, &publisher) {
                 let fresh = now.saturating_sub(obs.timestamp) <= bound_secs;
-                if obs.accepted && fresh && !is_challenged(&env, &region, &metric, slot) {
+                if obs.accepted && fresh {
                     values[len] = obs.value;
                     len += 1;
-                    if !contains_publisher(&publishers, &obs.publisher) {
-                        publishers.push_back(obs.publisher);
-                    }
                 }
             }
-            slot += 1;
         }
-        if len == 0 || publishers.len() < MIN_PUBLISHERS {
+        // One value per distinct publisher, so the sample size is the number
+        // of distinct publishers represented.
+        if (len as u32) < MIN_PUBLISHERS {
             return Err(Error::ObservationStale);
         }
         sort_ascending(&mut values, len);
@@ -502,24 +539,26 @@ impl OracleAdapter {
         read_pending(&env, &publisher).ok_or(Error::NoPendingChange)
     }
 
-    /// Read an observation at a ring slot, or `InvalidObservation` (308).
+    /// Read a publisher's latest observation for a region and metric, or
+    /// `InvalidObservation` (308) if it has none.
     pub fn observation(
         env: Env,
         region: Symbol,
         metric: Symbol,
-        seq: u32,
+        publisher: BytesN<32>,
     ) -> Result<Observation, Error> {
-        read_obs(&env, &region, &metric, seq).ok_or(Error::InvalidObservation)
+        read_latest(&env, &region, &metric, &publisher).ok_or(Error::InvalidObservation)
     }
 
-    /// Read the ring cursor for a region and metric (zeroed if none yet).
-    pub fn head(env: Env, region: Symbol, metric: Symbol) -> Head {
-        read_head(&env, &region, &metric)
+    /// The publishers that have reported for a region and metric, in first
+    /// report order (empty if none yet).
+    pub fn reporters(env: Env, region: Symbol, metric: Symbol) -> Vec<BytesN<32>> {
+        read_reporters(&env, &region, &metric)
     }
 
-    /// True if the ring slot carries a challenge flag.
-    pub fn is_challenged(env: Env, region: Symbol, metric: Symbol, seq: u32) -> bool {
-        is_challenged(&env, &region, &metric, seq)
+    /// True if the publisher's latest observation carries a challenge flag.
+    pub fn is_challenged(env: Env, region: Symbol, metric: Symbol, publisher: BytesN<32>) -> bool {
+        is_challenged(&env, &region, &metric, &publisher)
     }
 
     /// The configured staleness bound in hours.
@@ -549,26 +588,32 @@ fn read_pending(env: &Env, publisher: &BytesN<32>) -> Option<PendingRegistry> {
         .get(&DataKey::PendingPublisher(publisher.clone()))
 }
 
-fn read_obs(env: &Env, region: &Symbol, metric: &Symbol, seq: u32) -> Option<Observation> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::Obs(region.clone(), metric.clone(), seq))
+fn read_latest(
+    env: &Env,
+    region: &Symbol,
+    metric: &Symbol,
+    publisher: &BytesN<32>,
+) -> Option<Observation> {
+    env.storage().persistent().get(&DataKey::Latest(
+        region.clone(),
+        metric.clone(),
+        publisher.clone(),
+    ))
 }
 
-fn read_head(env: &Env, region: &Symbol, metric: &Symbol) -> Head {
+fn read_reporters(env: &Env, region: &Symbol, metric: &Symbol) -> Vec<BytesN<32>> {
     env.storage()
         .persistent()
-        .get(&DataKey::ObsHead(region.clone(), metric.clone()))
-        .unwrap_or(Head {
-            next_seq: 0,
-            count: 0,
-        })
+        .get(&DataKey::Reporters(region.clone(), metric.clone()))
+        .unwrap_or_else(|| Vec::new(env))
 }
 
-fn is_challenged(env: &Env, region: &Symbol, metric: &Symbol, seq: u32) -> bool {
-    env.storage()
-        .persistent()
-        .has(&DataKey::Challenge(region.clone(), metric.clone(), seq))
+fn is_challenged(env: &Env, region: &Symbol, metric: &Symbol, publisher: &BytesN<32>) -> bool {
+    env.storage().persistent().has(&DataKey::Challenge(
+        region.clone(),
+        metric.clone(),
+        publisher.clone(),
+    ))
 }
 
 fn read_staleness_hours(env: &Env) -> u64 {
@@ -590,20 +635,9 @@ fn require_admin(env: &Env) -> Result<(), Error> {
     Ok(())
 }
 
-/// Membership test over the distinct-publisher accumulator. A linear scan is
-/// bounded by `RING_SIZE`, so it stays cheap.
-fn contains_publisher(seen: &Vec<BytesN<32>>, publisher: &BytesN<32>) -> bool {
-    for existing in seen.iter() {
-        if existing == *publisher {
-            return true;
-        }
-    }
-    false
-}
-
 /// In-place insertion sort of `values[0..len]` ascending. `len` never exceeds
-/// `RING_SIZE`, so the quadratic cost is bounded by a small constant.
-fn sort_ascending(values: &mut [i128; RING_SIZE as usize], len: usize) {
+/// `MAX_REPORTERS`, so the quadratic cost is bounded by a small constant.
+fn sort_ascending(values: &mut [i128; MAX_REPORTERS as usize], len: usize) {
     let mut i = 1;
     while i < len {
         let key = values[i];

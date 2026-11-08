@@ -19,6 +19,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Security
 
 - `cargo-deny` ignores RUSTSEC-2026-0387 (`crypto-bigint` 0.5.5 timing variability) with a recorded rationale: the crate is reached only through `soroban-env-host`, the native test and simulation host, and is absent from every deployed `wasm32v1-none` contract; the only fix (0.7.6) needs a `soroban-sdk` major upgrade, tracked to remove the ignore (DR-0034).
+- `oracle-adapter` rejects replayed observations and counts one value per publisher (GHSA-j7mx-4cjh-7988, DR-0035). `submit` checked a publisher's signature but not whether the signed payload had already been accepted, and `median` sampled every slot of a 16 slot ring shared by all publishers. Anyone could resubmit a publisher's public signed observation: 15 copies let one publisher set the median while the two publisher gate still passed, and 16 evicted every other publisher so the index read stale. A submission now needs a timestamp strictly newer than the publisher's latest for that region and metric (`ReplayedObservation` 309). The ring is replaced by one latest observation per publisher, and `median` takes at most one value per active publisher, so removed publishers no longer count either. Reported privately by an independent security researcher.
+
+### Changed
+
+- `oracle-adapter` API and storage, as part of the fix above: `submit` returns nothing instead of a ring slot; `challenge`, `unchallenge`, `is_challenged`, and `observation` take the publisher key instead of a slot; `head` is removed and `reporters` lists the publishers that have reported for a region and metric (capped at 16, `TooManyReporters` 310; removed publishers are dropped from the list to make room); the `observation`, `challenge`, and `unchallenge` events carry the publisher (and the observation timestamp) instead of a slot. Storage keys `Obs` and `ObsHead` are replaced by `Latest` and `Reporters`, and `Challenge` is keyed by publisher. The signed `ObservationPayload` is unchanged, so publisher signatures are unaffected.
 
 ## [0.2.0] - 2026-09-28
 

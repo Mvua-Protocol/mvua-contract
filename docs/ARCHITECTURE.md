@@ -105,8 +105,8 @@ sequenceDiagram
   participant PV as payout-vault
   participant CB as Claimable balances
   PUB->>OA: submit(signed observation)
-  OA->>OA: verify ed25519, store, drop if stale or forged
-  Note over OA: median of last N valid per region and metric
+  OA->>OA: verify ed25519, reject forged or replayed, keep latest per publisher
+  Note over OA: median of one valid value per active publisher
   TE->>OA: read median series (region, metric, window)
   TE->>TE: evaluate index; if breached, state = triggered
   Note over TE: challenge window before finalize
@@ -161,9 +161,9 @@ Key naming: a `#[contracttype]` enum named `DataKey` per contract, variants in `
 | `Admin` | guardian config reference | Instance | Registry changes are timelocked (FR-ORC-1) |
 | `Publisher(pubkey)` | active flag, added_at | Persistent | Rotation and removal via timelocked admin; a removal deactivates rather than deletes so observation history keeps a resolvable author |
 | `PendingPublisher(pubkey)` | add flag, eta | Persistent | A proposed add or remove awaiting its registry timelock (provisional 7 days); cancellable before eta |
-| `Obs(region, metric, seq)` | value, timestamp, publisher, accepted flag | Persistent | Append only ring of the last N (RING_SIZE = 16) per region and metric; slot is `next_seq % N` |
-| `ObsHead(region, metric)` | next_seq, count | Persistent | Ring cursor; supports median over the last N |
-| `Challenge(region, metric, seq)` | reason code | Persistent | Set by guardians to exclude a slot from the median; cleared on slot reuse |
+| `Latest(region, metric, pubkey)` | value, timestamp, publisher, accepted flag | Persistent | A publisher's latest observation; a submission must carry a strictly newer timestamp or is rejected as a replay (`ReplayedObservation` 309, DR-0035) |
+| `Reporters(region, metric)` | list of pubkeys | Persistent | Publishers that have reported, in first report order; capped at `MAX_REPORTERS` (16, `TooManyReporters` 310), with removed publishers dropped to make room. TTL extended on every submission. `median` reads one value per active publisher from this list |
+| `Challenge(region, metric, pubkey)` | reason code | Persistent | Set by guardians to exclude a publisher's latest observation from the median; cleared by that publisher's next submission |
 | `PublisherFee(pubkey)` | accrued | Persistent | Reserved for the fee ledger (FR-ORC-6, P1.6.5); unused in Sprint 1.6 |
 | `StalenessBound` | hours | Instance | Fail safe threshold, default 48 (FR-ORC-4) |
 
@@ -207,7 +207,7 @@ Every contract defines exactly one `#[contracterror]` enum. Error codes are numb
 |---|---|---|
 | `risk-pool` | 100 to 199 | `PoolNotFound` (100), `InsufficientReserves` (101), `SolvencyViolated` (102), `SeasonNotOpen` (103), `TrancheWithdrawBlocked` (104), `FeeCapExceeded` (105), `InvalidConfig` (106), `InvalidAmount` (107), `InsufficientReceipts` (108), `TrancheCapExceeded` (109), `InvalidSeasonState` (110), `SeasonNotFound` (111) |
 | `policy` | 200 to 299 | `PolicyNotFound` (200), `InvalidState` (201), `WindowStarted` (202), `NotTransferable` (203), `QuoteMismatch` (204), `InvalidCoverage` (205), `InvalidWindow` (206), `NotExpired` (207), `InvalidBatch` (208) |
-| `oracle-adapter` | 300 to 399 | `UnknownPublisher` (300), `BadSignature` (301), `ObservationStale` (302), `Challenged` (303), `RegistryTimelock` (304), `PublisherExists` (305), `NoPendingChange` (306), `PendingExists` (307), `InvalidObservation` (308) |
+| `oracle-adapter` | 300 to 399 | `UnknownPublisher` (300), `BadSignature` (301), `ObservationStale` (302), `Challenged` (303), `RegistryTimelock` (304), `PublisherExists` (305), `NoPendingChange` (306), `PendingExists` (307), `InvalidObservation` (308), `ReplayedObservation` (309), `TooManyReporters` (310) |
 | `trigger-engine` | 400 to 499 | `IndexNotFound` (400), `StaleIndex` (401), `AlreadyFinalized` (402), `NotTriggered` (403), `NonDeterministicInput` (404), `InvalidIndexDef` (405), `OracleNotConfigured` (406) |
 | `payout-vault` | 500 to 599 | `Paused` (500), `BatchComplete` (501), `NoFinalizedTrigger` (502), `PayoutExists` (503), `NothingToClaim` (504), `InvalidBatch` (505), `InvalidEntry` (506) |
 | shared or auth | 900 to 999 | `Unauthorized` (900), `TimelockPending` (901), `NotInitialized` (902), `Overflow` (903) |
@@ -253,6 +253,6 @@ These hold across contract boundaries and are the backbone of the Phase 5 invari
 ## 11. Open questions (resolve before or during Phase 1)
 
 1. ~~Receipt token representation: internal ledger entries versus separate SAC token contracts per tranche.~~ **Resolved (DR-0020, 2026-09-25):** receipts are held as an internal per holder ledger (`Receipt(pool_id, tier, holder)`), not a separate token contract, for v1. Tranche transferability, if enabled, moves ledger balances within the contract.
-2. Observation ring size N and staleness bound X: placeholders until the index spec backtests inform them (see `INDEX-SPEC.md`).
+2. Reporter cap (`MAX_REPORTERS`, replacing the observation ring size N, DR-0035) and staleness bound X: placeholders until the index spec backtests inform them (see `INDEX-SPEC.md`).
 3. ~~Whether `trigger-engine` reads `oracle-adapter` directly by cross contract call or receives a pushed median snapshot.~~ **Resolved (DR-0025 then DR-0027, 2026-09-27):** the direct cross contract read of `oracle-adapter.median` is the single source of truth, now wired as `record_day_from_oracle` (the oracle address is set via `set_oracle`). The guardian `record_day` feed is retained as a fallback and local testing path; both share the same `fold_day` reduction, and a stale oracle traps the cross call so no day is folded.
 4. Claimable balance predicate policy (claim window length, reclaim of unclaimed funds to the pool). Confirm in P1.8.
