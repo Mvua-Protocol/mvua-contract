@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `spec-check` CI guard (`scripts/check-specs.sh`, run by the CI `verify` job): builds every deployable contract to `wasm32v1-none` and parses each wasm's `contractspecv0` section, failing when any function, struct field, union case, or event parameter references a user-defined type the spec does not define. This is the class of bug behind the first testnet season's "Missing Entry Bps" failure, where the `Bps` type alias leaked into the `trigger-engine` spec as a dangling type and the in host tests could not notice because they never round trip through the spec (DR-0032). An audit of all contracts found no remaining type alias in a spec position.
+
 ## [0.2.0] - 2026-09-28
 
 ### Added
