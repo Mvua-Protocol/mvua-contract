@@ -8,7 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- README lists the live testnet contract ids and links the on chain finalize, payout, and claim transactions of the first full season, which settled matching golden vector G3 (severity 2857 bps, payout 2857000).
 - `spec-check` CI guard (`scripts/check-specs.sh`, run by the CI `verify` job): builds every deployable contract to `wasm32v1-none` and parses each wasm's `contractspecv0` section, failing when any function, struct field, union case, or event parameter references a user-defined type the spec does not define. This is the class of bug behind the first testnet season's "Missing Entry Bps" failure, where the `Bps` type alias leaked into the `trigger-engine` spec as a dangling type and the in host tests could not notice because they never round trip through the spec (DR-0032). An audit of all contracts found no remaining type alias in a spec position.
+
+### Fixed
+
+- `trigger-engine` contract spec referenced the `Bps` type alias without defining it, so the Stellar CLI could not parse `IndexParams` ("Missing Entry Bps") and `create_index` was uncallable from the CLI. The four spec exposed positions (`IndexParams.trigger_ratio_bps`, `IndexParams.exhaustion_ratio_bps`, `TriggerStatus::Finalized`, and the `Finalized` event's `severity`) now spell `u32` literally; no logic change (DR-0032).
+- `scripts/testnet/addresses.env`, the per deploy state written by `deploy.sh`, is now git ignored.
 
 ### Security
 
