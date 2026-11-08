@@ -11,6 +11,10 @@
 .env.*
 !.env.example
 
+# Live testnet deployment state written by deploy.sh. Public material only (no
+# secret keys), but treated like any .env: regenerated per deploy, never committed.
+scripts/testnet/addresses.env
+
 # Editors
 .idea/
 .vscode/
