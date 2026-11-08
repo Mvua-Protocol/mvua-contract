@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- README lists the live testnet contract ids and links the on chain finalize, payout, and claim transactions of the first full season, which settled matching golden vector G3 (severity 2857 bps, payout 2857000).
+
+### Fixed
+
+- `trigger-engine` contract spec referenced the `Bps` type alias without defining it, so the Stellar CLI could not parse `IndexParams` ("Missing Entry Bps") and `create_index` was uncallable from the CLI. The four spec exposed positions (`IndexParams.trigger_ratio_bps`, `IndexParams.exhaustion_ratio_bps`, `TriggerStatus::Finalized`, and the `Finalized` event's `severity`) now spell `u32` literally; no logic change (DR-0032).
+- `scripts/testnet/addresses.env`, the per deploy state written by `deploy.sh`, is now git ignored.
+
 ## [0.2.0] - 2026-09-28
 
 ### Added
