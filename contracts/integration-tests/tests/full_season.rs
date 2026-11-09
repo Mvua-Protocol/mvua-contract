@@ -198,43 +198,36 @@ fn deploy_world() -> World {
     }
 }
 
-// Drive two publisher keys through one shared registry timelock so both are
-// active. The oracle median needs at least two distinct publishers, so a single
-// season always registers a pair. Proposing both before the single time advance
-// keeps the ledger clock at one timelock rather than two.
-fn register_publishers(w: &World, a: &BytesN<32>, b: &BytesN<32>) {
+// Multi publisher harness (P2.3.1): any number of independent publisher keys,
+// each signing its own reading. The oracle median needs at least two distinct
+// publishers. Proposing every key before one time advance keeps the ledger clock
+// at a single registry timelock.
+fn register_publishers(w: &World, keys: &[&SigningKey]) {
     let oracle = w.oracle();
-    oracle.propose_publisher(a, &true);
-    oracle.propose_publisher(b, &true);
+    for sk in keys {
+        oracle.propose_publisher(&pubkey(&w.env, sk), &true);
+    }
     advance_time(&w.env, TIMELOCK + 1);
-    oracle.execute_publisher(a);
-    oracle.execute_publisher(b);
+    for sk in keys {
+        oracle.execute_publisher(&pubkey(&w.env, sk));
+    }
 }
 
-// Submit one observation of `value` from each of two publishers at the current
-// ledger time, signed over the payload the oracle reconstructs. The median over
-// two equal values is that value, satisfying the two-publisher quorum.
-fn report(w: &World, sk_a: &SigningKey, sk_b: &SigningKey, value: i128) {
-    let pk_a = pubkey(&w.env, sk_a);
-    let pk_b = pubkey(&w.env, sk_b);
+// Each publisher submits its own value at the current ledger time, signed over
+// the payload the oracle reconstructs: a disagreement profile when they differ.
+fn report(w: &World, readings: &[(&SigningKey, i128)]) {
     let ts = w.env.ledger().timestamp();
     let oracle = w.oracle();
-    oracle.submit(
-        &region(),
-        &metric(),
-        &ts,
-        &value,
-        &pk_a,
-        &sign(&w.env, sk_a, ts, value),
-    );
-    oracle.submit(
-        &region(),
-        &metric(),
-        &ts,
-        &value,
-        &pk_b,
-        &sign(&w.env, sk_b, ts, value),
-    );
+    for (sk, value) in readings {
+        oracle.submit(
+            &region(),
+            &metric(),
+            &ts,
+            value,
+            &pubkey(&w.env, sk),
+            &sign(&w.env, sk, ts, *value),
+        );
+    }
 }
 
 // A farmer buys one coverage unit against `index_id` for the active season. The
@@ -271,7 +264,7 @@ fn full_rainfall_season_pays_and_claims() {
 
     let sk_a = signer(1);
     let sk_b = signer(2);
-    register_publishers(&w, &pubkey(&w.env, &sk_a), &pubkey(&w.env, &sk_b));
+    register_publishers(&w, &[&sk_a, &sk_b]);
 
     // Define the rainfall index (id 0) the season underwrites.
     let index_id = w.te().create_index(&rainfall_params(&w.env));
@@ -280,7 +273,7 @@ fn full_rainfall_season_pays_and_claims() {
     let policy_id = buy_policy(&w, &farmer, index_id);
 
     // Both publishers report drought-level daily rainfall (130 mm). Median 130.
-    report(&w, &sk_a, &sk_b, 130);
+    report(&w, &[(&sk_a, 130), (&sk_b, 130)]);
 
     // Record four days from the oracle: sum 520 over baseline 800 = ratio 6500.
     for day in 1..=4u64 {
@@ -352,14 +345,14 @@ fn healthy_season_blocks_payout() {
 
     let sk_a = signer(3);
     let sk_b = signer(4);
-    register_publishers(&w, &pubkey(&w.env, &sk_a), &pubkey(&w.env, &sk_b));
+    register_publishers(&w, &[&sk_a, &sk_b]);
 
     let index_id = w.te().create_index(&rainfall_params(&w.env));
     let farmer = Address::generate(&w.env);
     let policy_id = buy_policy(&w, &farmer, index_id);
 
     // Ample rainfall (250 mm/day, sum 1000 over baseline 800): no breach.
-    report(&w, &sk_a, &sk_b, 250);
+    report(&w, &[(&sk_a, 250), (&sk_b, 250)]);
     for day in 1..=4u64 {
         w.te().record_day_from_oracle(&index_id, &0, &day);
     }
@@ -387,4 +380,56 @@ fn healthy_season_blocks_payout() {
         w.rp().solvency(&w.pool_id).reserves,
         RESERVES + season.premiums_in
     );
+}
+
+// Publisher disagreement (P2.3.2): one of three publishers reports a false
+// drought. The median follows the two honest readings, so the window stays
+// healthy and no payout is possible. With only two publishers the same lie
+// would average to 130 and trigger, which is why the third voice matters.
+#[test]
+fn one_lying_publisher_of_three_cannot_trigger() {
+    let w = deploy_world();
+
+    let liar = signer(5);
+    let honest_1 = signer(6);
+    let honest_2 = signer(7);
+    register_publishers(&w, &[&liar, &honest_1, &honest_2]);
+
+    let index_id = w.te().create_index(&rainfall_params(&w.env));
+    let farmer = Address::generate(&w.env);
+    buy_policy(&w, &farmer, index_id);
+
+    report(&w, &[(&liar, 10), (&honest_1, 250), (&honest_2, 250)]);
+    for day in 1..=4u64 {
+        assert_eq!(w.te().record_day_from_oracle(&index_id, &0, &day), 250);
+    }
+    assert_eq!(w.te().evaluate(&index_id, &0), TriggerStatus::Healthy);
+}
+
+// Dispute (P2.3.2): two of three publishers collude on a false drought, so the
+// median would follow them. The guardian challenges both readings; with one
+// publisher left the oracle reports stale, so the trigger engine refuses to
+// record the day rather than fold a disputed value: fail safe, not fail open.
+#[test]
+fn challenged_majority_leaves_the_feed_stale_not_wrong() {
+    let w = deploy_world();
+
+    let liar_1 = signer(8);
+    let liar_2 = signer(9);
+    let honest = signer(10);
+    register_publishers(&w, &[&liar_1, &liar_2, &honest]);
+
+    let index_id = w.te().create_index(&rainfall_params(&w.env));
+    report(&w, &[(&liar_1, 10), (&liar_2, 10), (&honest, 250)]);
+    assert_eq!(w.oracle().median(&region(), &metric()), 10);
+
+    for sk in [&liar_1, &liar_2] {
+        w.oracle()
+            .challenge(&region(), &metric(), &pubkey(&w.env, sk), &1);
+    }
+    assert!(w
+        .te()
+        .try_record_day_from_oracle(&index_id, &0, &1)
+        .is_err());
+    assert_eq!(w.te().accumulator(&index_id, &0).days_recorded, 0);
 }

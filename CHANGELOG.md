@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - README lists the live testnet contract ids and links the on chain finalize, payout, and claim transactions of the first full season, which settled matching golden vector G3 (severity 2857 bps, payout 2857000).
 - `spec-check` CI guard (`scripts/check-specs.sh`, run by the CI `verify` job): builds every deployable contract to `wasm32v1-none` and parses each wasm's `contractspecv0` section, failing when any function, struct field, union case, or event parameter references a user-defined type the spec does not define. This is the class of bug behind the first testnet season's "Missing Entry Bps" failure, where the `Bps` type alias leaked into the `trigger-engine` spec as a dangling type and the in host tests could not notice because they never round trip through the spec (DR-0032). An audit of all contracts found no remaining type alias in a spec position.
+- Multi publisher integration harness and dispute tests (Sprint 2.3, P2.3.1 and P2.3.2): the full season test registers any number of independent publishers, each signing its own reading. Two new end to end tests cover disagreement and disputes. With one false drought among three publishers, the median follows the honest two and the window stays healthy. With two colluding publishers challenged by the guardian, the oracle reads stale and the trigger engine refuses to record the day, so a disputed feed blocks rather than pays.
 
 ### Fixed
 
