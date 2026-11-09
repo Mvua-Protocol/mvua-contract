@@ -83,6 +83,7 @@ The workspace is a set of focused Soroban contract crates plus shared support cr
 | `payout-vault` | Resumable batch payouts to claimable balances, pause | **implemented** (see below) |
 | `test-utils` | Shared test fixtures, scenario builders, mock publishers | shared, in use |
 | `integration-tests` | End to end tests wiring all five contracts through one full season | tests only, in use |
+| `backtest` | Replays historical seasons from `data/history` through the real trigger-engine and reports triggers and payouts | host only tool, in use |
 
 "scaffolded" means the crate compiles with its storage layout (`DataKey`) and error model (`#[contracterror]`) in place and a constructor, with business logic landing in later sprints. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the authoritative storage and error tables.
 
@@ -184,6 +185,7 @@ The toolchain, the `soroban-sdk` version, and every other dependency are pinned 
 |---|---|
 | `cargo test --workspace` | Unit and integration tests for all crates |
 | `cargo test -p integration-tests` | End to end test: all five contracts wired through one full season |
+| `cargo run --release -p backtest -- --data data/history/NG_KAN.csv --start 06-01 --days 122` | Backtest a rainfall index over 34 historical seasons |
 | `cargo clippy --workspace --all-targets -- -D warnings` | Lint gate (warnings deny) |
 | `cargo fmt --all --check` | Format gate |
 | `cargo test --workspace -- --include-ignored testnet` | Testnet integration suite (later in Phase 1) |

@@ -20,6 +20,7 @@ members = [
     "contracts/payout-vault",
     "contracts/integration-tests",
     "contracts/spec-check",
+    "contracts/backtest",
 ]
 
 [workspace.package]
