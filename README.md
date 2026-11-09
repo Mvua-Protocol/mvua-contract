@@ -218,7 +218,7 @@ The contracts are live on Stellar testnet. Open any id on
 |---|---|
 | `risk-pool` | [`CBCM4INQ...N6KBB`](https://stellar.expert/explorer/testnet/contract/CBCM4INQE7EP22NCQNE3CAGYG2OHB52OEBRPPGA7CPOST7XPON3N6KBB) |
 | `policy` | [`CBVAHVPC...JVFM`](https://stellar.expert/explorer/testnet/contract/CBVAHVPCKRD7VT7IXNGVDZMFJ5IIXPDD2PZBXOB33FOXPIK632JLJVFM) |
-| `oracle-adapter` | [`CD4XMGP7...2PLWI`](https://stellar.expert/explorer/testnet/contract/CD4XMGP7ZSJW7X4HDSTVJAVV4ZXYWVXFSIMM24FUTIT6L3AK2IN2PLWI) |
+| `oracle-adapter` | [`CCB4A2D3...TWSWF`](https://stellar.expert/explorer/testnet/contract/CCB4A2D3HYHRRL5XWEPRQPVPC4FD2GAU63WLQOXCW6AFLPNA64ETWSWF) |
 | `trigger-engine` | [`CBILV7F6...AZRR`](https://stellar.expert/explorer/testnet/contract/CBILV7F6PKECVKSYR23RU5VWYGRWKDTFF6EUY53RM6DF6SNYF2MGAZRR) |
 | `payout-vault` | [`CAVTQ46Q...VK5A`](https://stellar.expert/explorer/testnet/contract/CAVTQ46QSIBFOYDAHBTS44ZUUKEMLGXQKETHQVKICY4EEGIPCAYEVK5A) |
 | settlement token | [`CAOXWNHS...MGBL`](https://stellar.expert/explorer/testnet/contract/CAOXWNHSM7RCF6Z7OQXVOOPE2BBJMCLKZNKRDY23KU6THZLCR7LKMGBL) |
@@ -229,7 +229,7 @@ matching golden vector G3 (severity 2857 bps, payout 2857000). On chain proof:
 [finalize](https://stellar.expert/explorer/testnet/tx/81d77cc957f6b54741b9a713bb4e3f232edb5ccb2da7bfba3d824b60b9678d1c),
 [payout](https://stellar.expert/explorer/testnet/tx/f3dc31b40ecea54034489099959d59a6b859d158f1f2c081a3cf2a5da18bd087),
 [claim](https://stellar.expert/explorer/testnet/tx/54dbde6b4f543cb3db7b0d1544b9ee09f857d3d27fa6223fa4f4ea4fbef44e3e).
-Testnet only, pre alpha, not audited; addresses may change on a redeploy.
+`oracle-adapter` was redeployed on 2026-11-09 with the replay fix (DR-0035), so the first season ran on the previous oracle (`CD4XMGP7...2PLWI`). Testnet only, pre alpha, not audited; addresses may change on a redeploy.
 
 ## Roadmap
 

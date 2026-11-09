@@ -24,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - `oracle-adapter` API and storage, as part of the fix above: `submit` returns nothing instead of a ring slot; `challenge`, `unchallenge`, `is_challenged`, and `observation` take the publisher key instead of a slot; `head` is removed and `reporters` lists the publishers that have reported for a region and metric (capped at 16, `TooManyReporters` 310; removed publishers are dropped from the list to make room); the `observation`, `challenge`, and `unchallenge` events carry the publisher (and the observation timestamp) instead of a slot. Storage keys `Obs` and `ObsHead` are replaced by `Latest` and `Reporters`, and `Challenge` is keyed by publisher. The signed `ObservationPayload` is unchanged, so publisher signatures are unaffected.
+- README testnet table points `oracle-adapter` at the redeployed, fixed contract (`CCB4A2D3...TWSWF`, 2026-11-09) and notes that the first season ran on the previous oracle.
 
 ## [0.2.0] - 2026-09-28
 
