@@ -7,6 +7,8 @@
 //! severity, and payout is therefore produced by the code deployed on chain, so
 //! a backtest cannot drift from the contract the way a reimplementation could.
 
+pub mod solvency;
+
 use soroban_sdk::{testutils::Address as _, Address, Env};
 use test_utils::{advance_time, new_env};
 use trigger_engine::{IndexParams, TriggerEngine, TriggerEngineClient, TriggerStatus};

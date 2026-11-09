@@ -18,10 +18,17 @@
 //!   --dry-floor N          dry-days: a day at or below this is dry, default 100 (1 mm)
 //!   --coverage N           policy size for payouts, default 10000000 (one unit)
 //!   --scale N              units per millimetre, default 100 (the publisher's)
+//!
+//! Solvency (P2.4.3), in basis points or percent of total coverage:
+//!   --premium-bps N        premium per season, default 110 (the provisional
+//!                          testnet curve at one coverage unit, DR-0022)
+//!   --capital-pct N        starting reserves, default 100 (equal to coverage)
+//!   --horizon N            seasons per synthetic future, default 10
+//!   --paths N              synthetic futures, default 10000
 
 use std::{collections::HashMap, env, fs, path::Path, process};
 
-use backtest::{load_seasons, simulate};
+use backtest::{load_seasons, simulate, solvency};
 use soroban_sdk::{BytesN, Env, Symbol};
 use trigger_engine::{IndexKind, IndexParams};
 
@@ -196,5 +203,71 @@ fn run() -> Result<(), String> {
             worst.payout, worst.year, worst.severity_bps
         );
     }
+
+    // Solvency (P2.4.3): the season payouts above as losses in bps of coverage.
+    let losses: Vec<i64> = outcomes
+        .iter()
+        .map(|o| (o.payout * 10_000 / coverage) as i64)
+        .collect();
+    let premium = num("premium-bps", Some(110))? as i64;
+    let capital = num("capital-pct", Some(100))? as i64 * 100;
+    let horizon = num("horizon", Some(10))? as usize;
+    let paths = num("paths", Some(10_000))? as usize;
+    // Fixed seed and a fixed 1% ruin target keep every report reproducible.
+    let (seed, target) = (1, 1.0);
+    let pct = |bps: i64| format!("{:.1}%", bps as f64 / 100.0);
+
+    let history = solvency::reserve_path(&losses, premium, capital);
+    let low = history.iter().copied().min().unwrap_or(capital);
+    let sim = solvency::simulate(&losses, premium, capital, horizon, paths, seed);
+    let needed = solvency::required_premium_bps(&losses, capital, horizon, paths, seed, target);
+
+    println!("\n## Solvency\n");
+    println!(
+        "One region pool, capital {} of coverage, premium {} of coverage per season.\n",
+        pct(capital),
+        pct(premium)
+    );
+    println!(
+        "- Real sequence {}: reserves end at {} of coverage, lowest {}{}.",
+        if outcomes.len() > 1 {
+            format!(
+                "{} to {}",
+                outcomes[0].year,
+                outcomes[outcomes.len() - 1].year
+            )
+        } else {
+            outcomes[0].year.to_string()
+        },
+        pct(*history.last().unwrap_or(&capital)),
+        pct(low),
+        if low < 0 {
+            ", so the pool would have been ruined"
+        } else {
+            ""
+        }
+    );
+    println!(
+        "- {paths} synthetic {horizon} season futures (seasons resampled from history): ruin {:.2}%, reserves at the end {} / {} / {} (5th / median / 95th percentile).",
+        sim.ruin_pct,
+        pct(sim.p5),
+        pct(sim.p50),
+        pct(sim.p95)
+    );
+    // A premium below the mean loss only survives by consuming capital, so the
+    // sustainable floor is the higher of the ruin limit and the burning cost.
+    let burning = losses.iter().sum::<i64>() / losses.len() as i64;
+    let floor = needed.max(burning);
+    println!(
+        "- Lowest premium that keeps ruin at or below {target:.0}% over {horizon} seasons with this capital: {}. Burning cost: {}.",
+        pct(needed),
+        pct(burning)
+    );
+    println!(
+        "- Sustainable premium floor (the higher of the two, before expenses and investor return): {} of coverage per season, so {} is {}.",
+        pct(floor),
+        pct(premium),
+        if premium >= floor { "sufficient" } else { "too low" }
+    );
     Ok(())
 }
