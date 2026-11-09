@@ -1,0 +1,20 @@
+# Host only backtest runner (P2.4.2, FR-DATA-2): replays committed daily rainfall
+# history through the real trigger-engine contract on a local Soroban test host
+# and reports, per season, whether the index triggered, its severity, and the
+# payout. Never deployed and never built for wasm.
+[package]
+name = "backtest"
+description = "Runs an index definition over historical seasons through the real trigger-engine and reports triggers and payouts."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+# The test host and the contract itself, so every result comes from the exact
+# code deployed on chain rather than a reimplementation of the index math.
+soroban-sdk = { workspace = true, features = ["testutils"] }
+test-utils = { path = "../test-utils" }
+trigger-engine = { path = "../trigger-engine" }
