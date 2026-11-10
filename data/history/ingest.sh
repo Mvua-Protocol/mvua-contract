@@ -19,6 +19,8 @@ END="2024-12-31"
 REGIONS=(
   "KE_NAK -0.3031 36.0800"   # Nakuru, Kenya: bimodal rains, Rift Valley maize
   "NG_KAN 12.0480 8.5250"    # Kano, Nigeria: single Jun to Sep season, Sudan savanna grains
+  "TZ_DOD -6.1630 35.7516"   # Dodoma, Tanzania: single Dec to Apr season, drought prone central plateau
+  "TZ_MBE -8.9094 33.4608"   # Mbeya, Tanzania: single Nov to Apr season, southern highlands maize belt
 )
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
