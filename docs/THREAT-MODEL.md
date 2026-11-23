@@ -62,7 +62,7 @@ Numbered `T-n`. Each maps to the requirements that mitigate it and the tests tha
 
 - **T-1 Withdraw beyond solvency.** A depositor withdraws while payouts are pending, leaving the pool unable to pay. Mitigation: solvency invariant blocks withdrawals that would underfund committed payouts (FR-POOL-3, FR-POOL-5); property test on all pool paths (NFR-SEC-2).
 - **T-2 Premium underpayment or quote drift.** Buyer pays less than the quoted premium via a stale or manipulated quote. Mitigation: premium computed and collected atomically at purchase; `QuoteMismatch` (204) on divergence; premium accounted before the policy is `Active` (invariant 6 in ARCHITECTURE).
-- **T-3 Fee inflation.** Admin or a bug routes excess value to the treasury. Mitigation: protocol and publisher fees are capped by pool parameters; `FeeCapExceeded` (105); parameter changes timelocked (FR-POOL-7, FR-GOV-2).
+- **T-3 Fee inflation.** Admin or a bug routes excess value to the treasury. Mitigation: protocol and publisher fees are capped per season by pool parameters (DR-0043); `FeeCapExceeded` (105); parameter changes timelocked (FR-POOL-7, FR-GOV-2). The guardian's `withdraw_fees` can draw only on the fee balances, never on reserves, and fails with `InsufficientFees` (112) past them, so a compromised guardian cannot drain capital through it.
 - **T-4 Arithmetic overflow or rounding drain.** Crafted large values overflow or rounding leaks value each cycle. Mitigation: checked arithmetic returning `Overflow` (903); rounding always favors the pool; boundary and fuzz tests (P5.1.2).
 
 ### 4.2 Oracle and data integrity

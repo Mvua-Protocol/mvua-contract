@@ -55,8 +55,9 @@ pub struct TrancheConfig {
 }
 
 /// Fee schedule applied to each premium (FR-POOL-7). Rates are basis points of
-/// the gross premium; a cap of zero means the accrued fee of that kind is
-/// uncapped. Protocol and publisher rates together must not exceed 100 percent.
+/// the gross premium. Caps apply per season, so every season can pay its fees
+/// (DR-0043); a cap of zero means uncapped. Protocol and publisher rates
+/// together must not exceed 100 percent.
 #[contracttype]
 #[derive(Clone)]
 pub struct FeeConfig {
@@ -64,9 +65,9 @@ pub struct FeeConfig {
     pub protocol_bps: u32,
     /// Publisher fee rate in basis points of each premium.
     pub publisher_bps: u32,
-    /// Absolute cap on total accrued protocol fees (zero means uncapped).
+    /// Cap on protocol fees accrued in one season (zero means uncapped).
     pub protocol_cap: i128,
-    /// Absolute cap on total accrued publisher fees (zero means uncapped).
+    /// Cap on publisher fees accrued in one season (zero means uncapped).
     pub publisher_cap: i128,
 }
 
@@ -117,7 +118,9 @@ pub enum SeasonState {
 /// One underwriting season for a pool: its lifecycle state, window, and the
 /// running premium and payout totals that settlement reconciles (FR-POOL-6,
 /// FR-ACC-1). `premiums_in` is net of fees; `payouts_paid` is the underlying
-/// already released to triggered policies during the season.
+/// already released to triggered policies during the season. `protocol_fees`
+/// and `publisher_fees` are the fees this season accrued, which the per season
+/// caps bound (DR-0043).
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Season {
@@ -127,6 +130,8 @@ pub struct Season {
     pub premiums_in: i128,
     pub payouts_committed: i128,
     pub payouts_paid: i128,
+    pub protocol_fees: i128,
+    pub publisher_fees: i128,
 }
 
 /// Solvency record for a pool. The invariant `reserves >= committed` must hold
@@ -138,7 +143,9 @@ pub struct SolvencyState {
     pub committed: i128,
 }
 
-/// Accrued protocol and publisher fees for a pool, capped by `PoolConfig`.
+/// Fees a pool holds for the protocol and for publishers: accrued from premiums
+/// and not yet withdrawn (`withdraw_fees`). Held outside reserves, so a
+/// withdrawal never touches the solvency record.
 #[contracttype]
 #[derive(Clone)]
 pub struct TreasuryState {
@@ -170,7 +177,7 @@ pub enum DataKey {
     Receipt(u64, Tier, Address),
     /// Season state and running premium and payout totals.
     Season(u64, u64),
-    /// Accrued protocol and publisher fees for a pool.
+    /// Protocol and publisher fees held for a pool, not yet withdrawn.
     Treasury(u64),
     /// Solvency record: reserves and committed payouts for a pool.
     Solvency(u64),
@@ -195,6 +202,7 @@ pub enum Error {
     TrancheCapExceeded = 109,
     InvalidSeasonState = 110,
     SeasonNotFound = 111,
+    InsufficientFees = 112,
     Unauthorized = 900,
     TimelockPending = 901,
     NotInitialized = 902,
@@ -256,6 +264,23 @@ pub struct PremiumCollected {
     pub net: i128,
     pub protocol_fee: i128,
     pub publisher_fee: i128,
+}
+
+/// Which fee balance a withdrawal draws on.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FeeKind {
+    Protocol,
+    Publisher,
+}
+
+/// Emitted when the guardian withdraws fees. Topic `fees_withdrawn`.
+#[contractevent(topics = ["fees_withdrawn"], data_format = "map")]
+pub struct FeesWithdrawn {
+    pub pool_id: u64,
+    pub kind: FeeKind,
+    pub to: Address,
+    pub amount: i128,
 }
 
 /// Emitted when a season settles. Topic `season_settled`; data is the season
@@ -637,6 +662,8 @@ impl RiskPool {
             premiums_in: 0,
             payouts_committed: 0,
             payouts_paid: 0,
+            protocol_fees: 0,
+            publisher_fees: 0,
         };
         write_persistent(&env, &DataKey::Season(pool_id, season_id), &season);
 
@@ -701,13 +728,13 @@ impl RiskPool {
         let protocol_fee = accrue_fee(
             amount,
             config.fee.protocol_bps,
-            treasury.protocol_fees,
+            season.protocol_fees,
             config.fee.protocol_cap,
         )?;
         let publisher_fee = accrue_fee(
             amount,
             config.fee.publisher_bps,
-            treasury.publisher_fees,
+            season.publisher_fees,
             config.fee.publisher_cap,
         )?;
         let net = amount
@@ -732,6 +759,14 @@ impl RiskPool {
         write_persistent(&env, &DataKey::Treasury(pool_id), &treasury);
 
         season.premiums_in = season.premiums_in.checked_add(net).ok_or(Error::Overflow)?;
+        season.protocol_fees = season
+            .protocol_fees
+            .checked_add(protocol_fee)
+            .ok_or(Error::Overflow)?;
+        season.publisher_fees = season
+            .publisher_fees
+            .checked_add(publisher_fee)
+            .ok_or(Error::Overflow)?;
         write_persistent(&env, &DataKey::Season(pool_id, season_id), &season);
 
         let mut solvency = read_solvency(&env, pool_id)?;
@@ -923,9 +958,55 @@ impl RiskPool {
         read_season(&env, pool_id, season_id)
     }
 
-    /// Read a pool's accrued treasury fees, or `PoolNotFound` (100).
+    /// Read a pool's held fees, or `PoolNotFound` (100).
     pub fn treasury(env: Env, pool_id: u64) -> Result<TreasuryState, Error> {
         read_treasury(&env, pool_id)
+    }
+
+    /// Pay out held fees (FR-POOL-7). Guardian only. Sends `amount` of the
+    /// pool's `kind` fee balance to `to`: the protocol's operating account, or
+    /// the publishers' fee account, which shares it among the publishers whose
+    /// readings counted (DR-0043). Fees are held outside reserves, so this never
+    /// changes solvency. Fails with `InvalidAmount` (107) if `amount <= 0` and
+    /// `InsufficientFees` (112) if it exceeds the balance.
+    pub fn withdraw_fees(
+        env: Env,
+        pool_id: u64,
+        kind: FeeKind,
+        to: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        require_admin(&env)?;
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let config = read_config(&env, pool_id)?;
+        let mut treasury = read_treasury(&env, pool_id)?;
+        let balance = match kind {
+            FeeKind::Protocol => &mut treasury.protocol_fees,
+            FeeKind::Publisher => &mut treasury.publisher_fees,
+        };
+        if amount > *balance {
+            return Err(Error::InsufficientFees);
+        }
+        *balance -= amount;
+        write_persistent(&env, &DataKey::Treasury(pool_id), &treasury);
+
+        token::TokenClient::new(&env, &config.token).transfer(
+            &env.current_contract_address(),
+            &to,
+            &amount,
+        );
+
+        extend_instance_ttl(&env);
+        FeesWithdrawn {
+            pool_id,
+            kind,
+            to,
+            amount,
+        }
+        .publish(&env);
+        Ok(())
     }
 }
 
@@ -1044,8 +1125,8 @@ fn transition_season(
     Ok(())
 }
 
-/// Compute the fee to accrue on `amount` at `bps`, clamped so the running
-/// `accrued` total never exceeds `cap` (a cap of zero means uncapped). Returns
+/// Compute the fee to accrue on `amount` at `bps`, clamped so the season's
+/// running `accrued` total never exceeds `cap` (a cap of zero means uncapped). Returns
 /// `Overflow` (903) on checked arithmetic failure.
 fn accrue_fee(amount: i128, bps: u32, accrued: i128, cap: i128) -> Result<i128, Error> {
     let desired = apply_bps(amount, bps).ok_or(Error::Overflow)?;
