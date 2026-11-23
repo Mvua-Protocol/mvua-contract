@@ -751,6 +751,22 @@
                     },
                     {
                       "key": {
+                        "symbol": "protocol_fees"
+                      },
+                      "val": {
+                        "i128": "10"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "publisher_fees"
+                      },
+                      "val": {
+                        "i128": "5"
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "state"
                       },
                       "val": {
