@@ -18,6 +18,9 @@
 //!   --dry-floor N          dry-days: a day at or below this is dry, default 100 (1 mm)
 //!   --coverage N           policy size for payouts, default 10000000 (one unit)
 //!   --scale N              units per millimetre, default 100 (the publisher's)
+//!   --format md|csv|json   report format, default md (Markdown). csv prints
+//!                          one row per season; json prints the parameters,
+//!                          seasons, summary and solvency as one object
 //!
 //! Solvency (P2.4.3), in basis points or percent of total coverage:
 //!   --premium-bps N        premium per season, default 110 (the provisional
@@ -65,6 +68,20 @@ fn run() -> Result<(), String> {
         .file_stem()
         .and_then(|s| s.to_str())
         .ok_or("--data needs a file name")?;
+
+    let format = get("format").unwrap_or("md");
+    if !matches!(format, "md" | "csv" | "json") {
+        return Err(format!("--format: expected md, csv or json, got {format}"));
+    }
+    let md = format == "md";
+    // Markdown lines print only in the default format.
+    macro_rules! out {
+        ($($t:tt)*) => {
+            if md {
+                println!($($t)*);
+            }
+        };
+    }
 
     let csv = fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
     let seasons = load_seasons(&csv, start, days, scale as f64)?;
@@ -130,19 +147,39 @@ fn run() -> Result<(), String> {
     });
     let mm = |v: i128| format!("{:.1}", v as f64 / scale as f64);
 
-    println!("# Backtest: {region}, {start} for {days} days\n");
+    if format == "csv" {
+        println!("year,season_mm,pct_of_baseline,triggered,severity_bps,payout");
+        for o in &outcomes {
+            let pct = if rainfall {
+                format!("{:.2}", o.total as f64 * 100.0 / params.baseline as f64)
+            } else {
+                String::new()
+            };
+            println!(
+                "{},{},{pct},{},{},{}",
+                o.year,
+                mm(o.total),
+                o.triggered,
+                o.severity_bps,
+                o.payout
+            );
+        }
+        return Ok(());
+    }
+
+    out!("# Backtest: {region}, {start} for {days} days\n");
     if rainfall {
-        println!(
+        out!(
             "Rainfall shortfall. Baseline {} mm ({}), trigger below {:.1}%, full payout at or below {:.1}%. Coverage {coverage}.\n",
             mm(params.baseline),
             if get("baseline").is_some() { "given" } else { "mean season total" },
             params.trigger_ratio_bps as f64 / 100.0,
             params.exhaustion_ratio_bps as f64 / 100.0,
         );
-        println!("| Year | Season mm | % of baseline | Severity bps | Payout |");
-        println!("|---|---|---|---|---|");
+        out!("| Year | Season mm | % of baseline | Severity bps | Payout |");
+        out!("|---|---|---|---|---|");
         for o in &outcomes {
-            println!(
+            out!(
                 "| {} | {} | {:.1}% | {} | {} |",
                 o.year,
                 mm(o.total),
@@ -152,16 +189,16 @@ fn run() -> Result<(), String> {
             );
         }
     } else {
-        println!(
+        out!(
             "Consecutive dry days (a day at or below {} mm). Triggers at a {} day run, pays in full at {}. Coverage {coverage}.\n",
             mm(params.dry_floor),
             params.trigger_days,
             params.exhaustion_days,
         );
-        println!("| Year | Season mm | Severity bps | Payout |");
-        println!("|---|---|---|---|");
+        out!("| Year | Season mm | Severity bps | Payout |");
+        out!("|---|---|---|---|");
         for o in &outcomes {
-            println!(
+            out!(
                 "| {} | {} | {} | {} |",
                 o.year,
                 mm(o.total),
@@ -179,7 +216,7 @@ fn run() -> Result<(), String> {
     let n = outcomes.len();
     let paid: i128 = outcomes.iter().map(|o| o.payout).sum();
     let mean_payout = paid / n as i128;
-    println!(
+    out!(
         "\nSeasons: {n}. Triggered: {} ({:.1}%){}.",
         hits.len(),
         hits.len() as f64 * 100.0 / n as f64,
@@ -189,7 +226,7 @@ fn run() -> Result<(), String> {
             format!(" in {}", hits.join(", "))
         }
     );
-    println!(
+    out!(
         "Mean payout per season: {mean_payout} ({:.2}% of coverage, the burning cost before loading).",
         mean_payout as f64 * 100.0 / coverage as f64
     );
@@ -198,9 +235,11 @@ fn run() -> Result<(), String> {
         .max_by_key(|o| o.payout)
         .filter(|o| o.payout > 0)
     {
-        println!(
+        out!(
             "Largest payout: {} in {} (severity {} bps).",
-            worst.payout, worst.year, worst.severity_bps
+            worst.payout,
+            worst.year,
+            worst.severity_bps
         );
     }
 
@@ -222,13 +261,13 @@ fn run() -> Result<(), String> {
     let sim = solvency::simulate(&losses, premium, capital, horizon, paths, seed);
     let needed = solvency::required_premium_bps(&losses, capital, horizon, paths, seed, target);
 
-    println!("\n## Solvency\n");
-    println!(
+    out!("\n## Solvency\n");
+    out!(
         "One region pool, capital {} of coverage, premium {} of coverage per season.\n",
         pct(capital),
         pct(premium)
     );
-    println!(
+    out!(
         "- Real sequence {}: reserves end at {} of coverage, lowest {}{}.",
         if outcomes.len() > 1 {
             format!(
@@ -247,7 +286,7 @@ fn run() -> Result<(), String> {
             ""
         }
     );
-    println!(
+    out!(
         "- {paths} synthetic {horizon} season futures (seasons resampled from history): ruin {:.2}%, reserves at the end {} / {} / {} (5th / median / 95th percentile).",
         sim.ruin_pct,
         pct(sim.p5),
@@ -258,16 +297,49 @@ fn run() -> Result<(), String> {
     // sustainable floor is the higher of the ruin limit and the burning cost.
     let burning = losses.iter().sum::<i64>() / losses.len() as i64;
     let floor = needed.max(burning);
-    println!(
+    out!(
         "- Lowest premium that keeps ruin at or below {target:.0}% over {horizon} seasons with this capital: {}. Burning cost: {}.",
         pct(needed),
         pct(burning)
     );
-    println!(
+    out!(
         "- Sustainable premium floor (the higher of the two, before expenses and investor return): {} of coverage per season, so {} is {}.",
         pct(floor),
         pct(premium),
         if premium >= floor { "sufficient" } else { "too low" }
     );
+
+    if format == "json" {
+        let seasons: Vec<String> = outcomes
+            .iter()
+            .map(|o| {
+                format!(
+                    r#"{{"year":{},"season_mm":{},"triggered":{},"severity_bps":{},"payout":{}}}"#,
+                    o.year,
+                    mm(o.total),
+                    o.triggered,
+                    o.severity_bps,
+                    o.payout
+                )
+            })
+            .collect();
+        println!(
+            r#"{{"region":"{region}","start":"{start}","days":{days},"kind":"{}","baseline":{},"trigger_bps":{},"exhaustion_bps":{},"trigger_days":{},"exhaustion_days":{},"coverage":{coverage},"seasons":[{}],"summary":{{"seasons":{n},"triggered":{},"trigger_years":[{}],"burning_cost_bps":{burning},"mean_payout":{mean_payout}}},"solvency":{{"premium_bps":{premium},"capital_bps":{capital},"horizon":{horizon},"paths":{paths},"history_end_bps":{},"history_low_bps":{low},"ruin_pct":{:.2},"p5_bps":{},"p50_bps":{},"p95_bps":{},"required_premium_bps":{needed},"premium_floor_bps":{floor}}}}}"#,
+            if rainfall { "rainfall" } else { "dry-days" },
+            params.baseline,
+            params.trigger_ratio_bps,
+            params.exhaustion_ratio_bps,
+            params.trigger_days,
+            params.exhaustion_days,
+            seasons.join(","),
+            hits.len(),
+            hits.join(","),
+            history.last().unwrap_or(&capital),
+            sim.ruin_pct,
+            sim.p5,
+            sim.p50,
+            sim.p95,
+        );
+    }
     Ok(())
 }
