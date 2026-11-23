@@ -3,9 +3,15 @@ extern crate std;
 
 use super::*;
 use ed25519_dalek::{Signer, SigningKey};
-use soroban_sdk::{symbol_short, testutils::Address as _, vec, xdr::ToXdr, Address, Bytes, Env};
+use soroban_sdk::{
+    symbol_short,
+    testutils::{storage::Persistent as _, Address as _, Ledger as _},
+    vec,
+    xdr::ToXdr,
+    Address, Bytes, Env,
+};
 use std::vec::Vec as StdVec;
-use test_utils::{advance_time, new_env};
+use test_utils::{advance_sequence, advance_time, new_env};
 
 const TIMELOCK: u64 = 7 * 24 * 60 * 60;
 
@@ -584,4 +590,39 @@ fn reporters_are_capped() {
     assert_eq!(reporters.len(), 16);
     assert!(!reporters.contains(&retired));
     assert!(reporters.contains(&pk));
+}
+
+// Testnet's minimum persistent TTL, in ledgers: 7 days at 5 seconds a ledger,
+// the same span as the registry timelock (Phase 1 exit review).
+const TESTNET_MIN_PERSISTENT_TTL: u32 = 120_960;
+
+#[test]
+fn pending_publisher_outlives_the_timelock_in_ledgers() {
+    // TTL is counted in ledgers, not seconds, so this test advances the ledger
+    // sequence as well as the clock, under testnet's TTL settings.
+    let (env, _admin, id) = setup();
+    env.ledger().with_mut(|li| {
+        li.min_persistent_entry_ttl = TESTNET_MIN_PERSISTENT_TTL;
+        li.max_entry_ttl = 6_312_000;
+    });
+    let client = OracleAdapterClient::new(&env, &id);
+    let pk = pubkey(&env, &signer(1));
+    client.propose_publisher(&pk, &true);
+
+    // The write path extends the pending entry to the 90 day bump, far past
+    // the default minimum that would expire with the timelock.
+    let ttl = env.as_contract(&id, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::PendingPublisher(pk.clone()))
+    });
+    assert_eq!(ttl, common::PERSISTENT_BUMP_AMOUNT);
+    assert!(ttl > TESTNET_MIN_PERSISTENT_TTL);
+
+    // Seven days later in ledgers and in time, plus a margin: the entry is
+    // still live and the publisher can be activated.
+    advance_sequence(&env, TESTNET_MIN_PERSISTENT_TTL + 100);
+    advance_time(&env, TIMELOCK + 1);
+    client.execute_publisher(&pk);
+    assert!(client.is_publisher(&pk));
 }
