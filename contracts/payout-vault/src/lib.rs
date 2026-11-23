@@ -14,7 +14,7 @@
 use common::{extend_instance_ttl, extend_persistent_ttl};
 use soroban_sdk::{
     contract, contractclient, contracterror, contractevent, contractimpl, contracttype, token,
-    Address, Env, Vec,
+    Address, Env, Symbol, Vec,
 };
 
 /// Maximum payout entries in a single `pay_batch` call. A larger region is paid
@@ -35,8 +35,9 @@ pub enum BatchState {
 }
 
 /// One payout instruction in a batch. The guardian supplies `owner` and
-/// `coverage` from the authoritative policy record; the vault gates the payout
-/// on chain through `trigger-engine.payout_for` (DR-0026).
+/// `coverage`; the vault checks both, and the policy's pool, season and index,
+/// against the policy contract's record before paying (DR-0045), and gates the
+/// amount on chain through `trigger-engine.payout_for` (DR-0026).
 #[contracttype]
 #[derive(Clone)]
 pub struct PayoutEntry {
@@ -103,6 +104,7 @@ pub enum Error {
     NothingToClaim = 504,
     InvalidBatch = 505,
     InvalidEntry = 506,
+    PolicyMismatch = 507,
     Unauthorized = 900,
     NotInitialized = 902,
     Overflow = 903,
@@ -137,6 +139,44 @@ pub struct PauseSet {
 #[contractclient(name = "RiskPoolClient")]
 pub trait RiskPoolInterface {
     fn pay_out(env: Env, pool_id: u64, season_id: u64, to: Address, amount: i128) -> i128;
+}
+
+/// Lifecycle state of a policy, mirroring `policy::PolicyState` so the vault
+/// can decode the policy contract's record (same variant names).
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PolicyState {
+    Active,
+    Triggered,
+    Paid,
+    Expired,
+    Cancelled,
+}
+
+/// The policy contract's record, mirroring `policy::PolicyRecord` field for
+/// field so it decodes across the contract boundary.
+#[contracttype]
+#[derive(Clone)]
+pub struct PolicyRecord {
+    pub owner: Address,
+    pub pool_id: u64,
+    pub season_id: u64,
+    pub region: Symbol,
+    pub coverage: i128,
+    pub index_ref: u64,
+    pub window_start: u64,
+    pub window_end: u64,
+    pub severity_curve: u32,
+    pub premium_paid: i128,
+    pub net_reserved: i128,
+    pub state: PolicyState,
+}
+
+/// Cross contract view of a policy record (DR-0045). `policy` traps on an
+/// unknown id, which fails the whole batch.
+#[contractclient(name = "PolicyContractClient")]
+pub trait PolicyInterface {
+    fn policy(env: Env, policy_id: u64) -> PolicyRecord;
 }
 
 /// Cross contract view of trigger-engine's finalized payout amount (DR-0026).
@@ -224,6 +264,7 @@ impl PayoutVault {
 
         let pool: Address = read_ref(&env, &DataKey::PoolRef)?;
         let trigger: Address = read_ref(&env, &DataKey::TriggerRef)?;
+        let policies = PolicyContractClient::new(&env, &read_ref(&env, &DataKey::PolicyRef)?);
         let rp = RiskPoolClient::new(&env, &pool);
         let te = TriggerEngineClient::new(&env, &trigger);
         let vault = env.current_contract_address();
@@ -239,6 +280,23 @@ impl PayoutVault {
             }
             if entry.coverage <= 0 {
                 return Err(Error::InvalidEntry);
+            }
+            // The entry must describe a real, live policy on this pool, season
+            // and index exactly: a mistyped or forged entry fails the batch
+            // instead of paying the wrong account or amount (DR-0045).
+            let record = policies.policy(&entry.policy_id);
+            let live = matches!(
+                record.state,
+                PolicyState::Active | PolicyState::Triggered | PolicyState::Expired
+            );
+            if !live
+                || record.owner != entry.owner
+                || record.coverage != entry.coverage
+                || record.pool_id != pool_id
+                || record.season_id != season_id
+                || record.index_ref != index_id
+            {
+                return Err(Error::PolicyMismatch);
             }
 
             let amount = te.payout_for(&index_id, &window_id, &entry.coverage);
