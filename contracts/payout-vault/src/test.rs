@@ -15,6 +15,23 @@ const RESERVES: i128 = 40_000_000;
 
 // A stand in trigger-engine whose window is finalized at 50% severity: it pays
 // half of any positive coverage, matching `payout_for`'s success contract.
+// The index every test pays against; a policy record must name it.
+const INDEX_ID: u64 = 1;
+
+// Stands in for the policy contract: returns whatever record a test stored.
+#[contract]
+pub struct MockPolicy;
+
+#[contractimpl]
+impl MockPolicy {
+    pub fn set(env: Env, policy_id: u64, record: PolicyRecord) {
+        env.storage().persistent().set(&policy_id, &record);
+    }
+    pub fn policy(env: Env, policy_id: u64) -> PolicyRecord {
+        env.storage().persistent().get(&policy_id).unwrap()
+    }
+}
+
 #[contract]
 pub struct MockTriggerHalf;
 
@@ -42,6 +59,7 @@ struct Ctx {
     env: Env,
     rp_id: Address,
     vault_id: Address,
+    policy_id: Address,
     token: Address,
     pool_id: u64,
     season_id: u64,
@@ -91,13 +109,13 @@ fn setup_core(env: Env, trigger: Address) -> Ctx {
     let season_id = rp.open_season(&pool_id);
     rp.activate_season(&pool_id, &season_id);
 
-    let policy_ref = random_address(&env);
+    let policy_ref = env.register(MockPolicy, ());
     let vault_id = env.register(
         PayoutVault,
         (
             admin.clone(),
             rp_id.clone(),
-            policy_ref,
+            policy_ref.clone(),
             trigger,
             token.clone(),
         ),
@@ -108,6 +126,7 @@ fn setup_core(env: Env, trigger: Address) -> Ctx {
         env,
         rp_id,
         vault_id,
+        policy_id: policy_ref,
         token,
         pool_id,
         season_id,
@@ -129,13 +148,33 @@ fn setup_zero() -> Ctx {
 }
 
 // A single payout entry for `owner` over one coverage unit.
-fn one_entry(env: &Env, owner: &Address, policy_id: u64) -> Vec<PayoutEntry> {
-    let mut entries = Vec::new(env);
-    entries.push_back(PayoutEntry {
+// Store a live policy record matching the entry, so the vault's check passes.
+fn entry(ctx: &Ctx, owner: &Address, policy_id: u64, coverage: i128) -> PayoutEntry {
+    let record = PolicyRecord {
+        owner: owner.clone(),
+        pool_id: ctx.pool_id,
+        season_id: ctx.season_id,
+        region: symbol_short!("KE_NAK"),
+        coverage,
+        index_ref: INDEX_ID,
+        window_start: 0,
+        window_end: 0,
+        severity_curve: 0,
+        premium_paid: 0,
+        net_reserved: 0,
+        state: PolicyState::Active,
+    };
+    MockPolicyClient::new(&ctx.env, &ctx.policy_id).set(&policy_id, &record);
+    PayoutEntry {
         policy_id,
         owner: owner.clone(),
-        coverage: COVERAGE,
-    });
+        coverage,
+    }
+}
+
+fn one_entry(ctx: &Ctx, owner: &Address, policy_id: u64) -> Vec<PayoutEntry> {
+    let mut entries = Vec::new(&ctx.env);
+    entries.push_back(entry(ctx, owner, policy_id, COVERAGE));
     entries
 }
 
@@ -157,6 +196,7 @@ fn error_codes_match_contract_range() {
     assert_eq!(Error::NothingToClaim as u32, 504);
     assert_eq!(Error::InvalidBatch as u32, 505);
     assert_eq!(Error::InvalidEntry as u32, 506);
+    assert_eq!(Error::PolicyMismatch as u32, 507);
     assert_eq!(
         Error::Unauthorized as u32,
         common::error_codes::UNAUTHORIZED
@@ -181,7 +221,7 @@ fn pay_batch_moves_funds_and_credits_claim() {
         &7,
         &ctx.pool_id,
         &ctx.season_id,
-        &one_entry(&ctx.env, &owner, 42),
+        &one_entry(&ctx, &owner, 42),
     );
 
     assert_eq!(paid, 1);
@@ -217,7 +257,7 @@ fn claim_pushes_to_owner_and_zeroes_ledger() {
         &7,
         &ctx.pool_id,
         &ctx.season_id,
-        &one_entry(&ctx.env, &owner, 42),
+        &one_entry(&ctx, &owner, 42),
     );
     let claimed = vault.claim(&owner);
 
@@ -242,7 +282,7 @@ fn pay_batch_is_idempotent_on_retry() {
     let vault = PayoutVaultClient::new(&ctx.env, &ctx.vault_id);
     let rp = PoolClient::new(&ctx.env, &ctx.rp_id);
     let owner = random_address(&ctx.env);
-    let entries = one_entry(&ctx.env, &owner, 42);
+    let entries = one_entry(&ctx, &owner, 42);
 
     let first = vault.pay_batch(&1, &7, &ctx.pool_id, &ctx.season_id, &entries);
     let second = vault.pay_batch(&1, &7, &ctx.pool_id, &ctx.season_id, &entries);
@@ -264,16 +304,8 @@ fn pay_batch_credits_each_owner_in_the_batch() {
     let owner_a = random_address(&ctx.env);
     let owner_b = random_address(&ctx.env);
     let mut entries = Vec::new(&ctx.env);
-    entries.push_back(PayoutEntry {
-        policy_id: 1,
-        owner: owner_a.clone(),
-        coverage: COVERAGE,
-    });
-    entries.push_back(PayoutEntry {
-        policy_id: 2,
-        owner: owner_b.clone(),
-        coverage: COVERAGE,
-    });
+    entries.push_back(entry(&ctx, &owner_a, 1, COVERAGE));
+    entries.push_back(entry(&ctx, &owner_b, 2, COVERAGE));
 
     let paid = vault.pay_batch(&1, &7, &ctx.pool_id, &ctx.season_id, &entries);
 
@@ -295,7 +327,7 @@ fn pay_batch_skips_unbreached_window() {
         &7,
         &ctx.pool_id,
         &ctx.season_id,
-        &one_entry(&ctx.env, &owner, 42),
+        &one_entry(&ctx, &owner, 42),
     );
 
     assert_eq!(paid, 0);
@@ -366,7 +398,7 @@ fn pause_blocks_pay_batch_but_not_claim() {
         &7,
         &ctx.pool_id,
         &ctx.season_id,
-        &one_entry(&ctx.env, &owner, 42),
+        &one_entry(&ctx, &owner, 42),
     );
     vault.pause();
     assert!(vault.is_paused());
@@ -378,7 +410,7 @@ fn pause_blocks_pay_batch_but_not_claim() {
             &7,
             &ctx.pool_id,
             &ctx.season_id,
-            &one_entry(&ctx.env, &owner, 99),
+            &one_entry(&ctx, &owner, 99),
         )
         .err()
         .unwrap()
@@ -403,7 +435,7 @@ fn close_batch_blocks_further_payouts() {
         &7,
         &ctx.pool_id,
         &ctx.season_id,
-        &one_entry(&ctx.env, &owner, 42),
+        &one_entry(&ctx, &owner, 42),
     );
     vault.close_batch(&1, &7);
     assert!(matches!(vault.batch(&1, &7).state, BatchState::Complete));
@@ -414,7 +446,7 @@ fn close_batch_blocks_further_payouts() {
             &7,
             &ctx.pool_id,
             &ctx.season_id,
-            &one_entry(&ctx.env, &owner, 43),
+            &one_entry(&ctx, &owner, 43),
         )
         .err()
         .unwrap()
@@ -436,7 +468,7 @@ fn pay_out_works_after_season_close() {
         &7,
         &ctx.pool_id,
         &ctx.season_id,
-        &one_entry(&ctx.env, &owner, 42),
+        &one_entry(&ctx, &owner, 42),
     );
     assert_eq!(paid, 1);
     assert_eq!(vault.claimable(&owner), EXPECTED_PAYOUT);
@@ -452,4 +484,85 @@ fn batch_and_claimable_default_to_empty() {
     assert_eq!(batch.policies_paid, 0);
     assert_eq!(batch.total_disbursed, 0);
     assert!(matches!(batch.state, BatchState::Open));
+}
+
+// ----- DR-0045: every entry is checked against the policy record -----
+
+// Try one tampered entry and assert the batch fails with PolicyMismatch and
+// moves nothing.
+fn assert_rejected(ctx: &Ctx, index_id: u64, pool_id: u64, season_id: u64, e: PayoutEntry) {
+    let vault = PayoutVaultClient::new(&ctx.env, &ctx.vault_id);
+    let rp = PoolClient::new(&ctx.env, &ctx.rp_id);
+    let mut entries = Vec::new(&ctx.env);
+    entries.push_back(e.clone());
+    let err = vault
+        .try_pay_batch(&index_id, &7, &pool_id, &season_id, &entries)
+        .err()
+        .unwrap()
+        .unwrap();
+    assert_eq!(err, Error::PolicyMismatch);
+    assert_eq!(vault.claimable(&e.owner), 0);
+    assert_eq!(rp.solvency(&ctx.pool_id).reserves, RESERVES);
+}
+
+#[test]
+fn pay_batch_rejects_an_entry_for_another_owner() {
+    let ctx = setup();
+    let farmer = random_address(&ctx.env);
+    let mut e = entry(&ctx, &farmer, 42, COVERAGE);
+    e.owner = random_address(&ctx.env); // redirect the payout
+    assert_rejected(&ctx, INDEX_ID, ctx.pool_id, ctx.season_id, e);
+}
+
+#[test]
+fn pay_batch_rejects_an_inflated_coverage() {
+    let ctx = setup();
+    let farmer = random_address(&ctx.env);
+    let mut e = entry(&ctx, &farmer, 42, COVERAGE);
+    e.coverage = COVERAGE * 4; // claim more cover than was bought
+    assert_rejected(&ctx, INDEX_ID, ctx.pool_id, ctx.season_id, e);
+}
+
+#[test]
+fn pay_batch_rejects_a_policy_on_another_index_pool_or_season() {
+    let ctx = setup();
+    let farmer = random_address(&ctx.env);
+    let e = entry(&ctx, &farmer, 42, COVERAGE);
+    assert_rejected(&ctx, INDEX_ID + 1, ctx.pool_id, ctx.season_id, e.clone());
+    assert_rejected(&ctx, INDEX_ID, ctx.pool_id + 1, ctx.season_id, e.clone());
+    assert_rejected(&ctx, INDEX_ID, ctx.pool_id, ctx.season_id + 1, e);
+}
+
+#[test]
+fn pay_batch_rejects_a_cancelled_or_paid_policy() {
+    let ctx = setup();
+    let farmer = random_address(&ctx.env);
+    let mock = MockPolicyClient::new(&ctx.env, &ctx.policy_id);
+    for state in [PolicyState::Cancelled, PolicyState::Paid] {
+        let e = entry(&ctx, &farmer, 42, COVERAGE);
+        let mut record = mock.policy(&42);
+        record.state = state;
+        mock.set(&42, &record);
+        assert_rejected(&ctx, INDEX_ID, ctx.pool_id, ctx.season_id, e);
+    }
+}
+
+#[test]
+fn pay_batch_pays_an_expired_policy_whose_window_triggered() {
+    // DR-0044: expire can land before the trigger is marked; it still pays.
+    let ctx = setup();
+    let vault = PayoutVaultClient::new(&ctx.env, &ctx.vault_id);
+    let mock = MockPolicyClient::new(&ctx.env, &ctx.policy_id);
+    let farmer = random_address(&ctx.env);
+    let e = entry(&ctx, &farmer, 42, COVERAGE);
+    let mut record = mock.policy(&42);
+    record.state = PolicyState::Expired;
+    mock.set(&42, &record);
+    let mut entries = Vec::new(&ctx.env);
+    entries.push_back(e);
+    assert_eq!(
+        vault.pay_batch(&INDEX_ID, &7, &ctx.pool_id, &ctx.season_id, &entries),
+        1
+    );
+    assert_eq!(vault.claimable(&farmer), EXPECTED_PAYOUT);
 }
