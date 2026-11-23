@@ -139,8 +139,8 @@ Key naming: a `#[contracttype]` enum named `DataKey` per contract, variants in `
 | `PoolConfig(pool_id)` | token, region list, season length, premium curve params, tranche config, fee schedule, transferability default | Persistent | Immutable fields fixed at creation; parameter fields change only via timelock |
 | `Tranche(pool_id, tier)` | deposited amount, receipt supply | Persistent | `tier` is Junior or Senior |
 | `Receipt(pool_id, tier, holder)` | balance | Persistent | Pro rata claim on the tranche; internal ledger, not a token (DR-0020) |
-| `Season(pool_id, season_id)` | state, opened_at, closes_at, premiums_in, payouts_committed, payouts_paid | Persistent | Lifecycle `Open -> Active -> Closed -> Settled`; `premiums_in` is net of fees |
-| `Treasury(pool_id)` | protocol fees, publisher fees accrued | Persistent | Caps (`FeeConfig`) enforced on accrual in `collect_premium` |
+| `Season(pool_id, season_id)` | state, opened_at, closes_at, premiums_in, payouts_committed, payouts_paid, protocol_fees, publisher_fees | Persistent | Lifecycle `Open -> Active -> Closed -> Settled`; `premiums_in` is net of fees; the fee fields are this season's accrual, bounded by the per season caps (DR-0043) |
+| `Treasury(pool_id)` | protocol fees, publisher fees held | Persistent | Accrued in `collect_premium`, paid out by the guardian with `withdraw_fees`; held outside reserves (DR-0043) |
 | `Solvency(pool_id)` | reserves, committed | Persistent | Invariant: `reserves >= committed` at end of every mutating call |
 
 ### 5.2 policy
@@ -150,7 +150,7 @@ Key naming: a `#[contracttype]` enum named `DataKey` per contract, variants in `
 | `Admin` | guardian config reference | Instance | |
 | `RiskPool` | risk-pool contract address | Instance | The pool policies quote and purchase against; set at init |
 | `PolicyCounter` | u64 | Instance | Monotonic policy id source |
-| `Policy(policy_id)` | owner, pool_id, season_id, region, coverage, index_ref, window_start, window_end, severity_curve, premium_paid, net_reserved, state | Persistent | State: Active, Triggered, Paid, Expired, Cancelled. `premium_paid` is gross; `net_reserved` (gross minus fees) is what a cancellation refunds |
+| `Policy(policy_id)` | owner, pool_id, season_id, region, coverage, index_ref, window_start, window_end, severity_curve, premium_paid, net_reserved, state | Persistent | State: Active, Triggered, Paid, Expired, Cancelled; `Expired -> Triggered` is allowed for the guardian, since anyone may expire a policy as its window ends (DR-0044). `premium_paid` is gross; `net_reserved` (gross minus fees) is what a cancellation refunds |
 | `MetaPointer(policy_id)` | opaque off chain reference (`BytesN<32>`) | Persistent | Content hash or URI digest; no PII on chain (NFR-PRIV-1) |
 | `Transferable(pool_id)` | bool | Persistent | Default false (FR-POL-6) |
 
@@ -205,7 +205,7 @@ Every contract defines exactly one `#[contracterror]` enum. Error codes are numb
 
 | Contract | Code range | Example variants |
 |---|---|---|
-| `risk-pool` | 100 to 199 | `PoolNotFound` (100), `InsufficientReserves` (101), `SolvencyViolated` (102), `SeasonNotOpen` (103), `TrancheWithdrawBlocked` (104), `FeeCapExceeded` (105), `InvalidConfig` (106), `InvalidAmount` (107), `InsufficientReceipts` (108), `TrancheCapExceeded` (109), `InvalidSeasonState` (110), `SeasonNotFound` (111) |
+| `risk-pool` | 100 to 199 | `PoolNotFound` (100), `InsufficientReserves` (101), `SolvencyViolated` (102), `SeasonNotOpen` (103), `TrancheWithdrawBlocked` (104), `FeeCapExceeded` (105), `InvalidConfig` (106), `InvalidAmount` (107), `InsufficientReceipts` (108), `TrancheCapExceeded` (109), `InvalidSeasonState` (110), `SeasonNotFound` (111), `InsufficientFees` (112) |
 | `policy` | 200 to 299 | `PolicyNotFound` (200), `InvalidState` (201), `WindowStarted` (202), `NotTransferable` (203), `QuoteMismatch` (204), `InvalidCoverage` (205), `InvalidWindow` (206), `NotExpired` (207), `InvalidBatch` (208) |
 | `oracle-adapter` | 300 to 399 | `UnknownPublisher` (300), `BadSignature` (301), `ObservationStale` (302), `Challenged` (303), `RegistryTimelock` (304), `PublisherExists` (305), `NoPendingChange` (306), `PendingExists` (307), `InvalidObservation` (308), `ReplayedObservation` (309), `TooManyReporters` (310) |
 | `trigger-engine` | 400 to 499 | `IndexNotFound` (400), `StaleIndex` (401), `AlreadyFinalized` (402), `NotTriggered` (403), `NonDeterministicInput` (404), `InvalidIndexDef` (405), `OracleNotConfigured` (406) |

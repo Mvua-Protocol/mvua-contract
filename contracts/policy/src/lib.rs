@@ -34,8 +34,10 @@ pub trait RiskPoolInterface {
 
 /// Lifecycle state of a policy certificate (`docs/ARCHITECTURE.md` section 5.2).
 /// Transitions run `Active -> Triggered -> Paid`, `Active -> Expired` after the
-/// coverage window, and `Active -> Cancelled` before it opens. Any other move
-/// is rejected with `InvalidState` (201).
+/// coverage window, and `Active -> Cancelled` before it opens. `Expired ->
+/// Triggered` is also allowed, because anyone may expire a policy the moment
+/// its window ends, which can land before the guardian marks a confirmed
+/// trigger (DR-0044). Any other move is rejected with `InvalidState` (201).
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PolicyState {
@@ -318,12 +320,21 @@ impl Policy {
         Ok(ids)
     }
 
-    /// Mark an `Active` policy as `Triggered` (FR-POL-1). Guardian only; the
-    /// trigger-engine drives this once an index breach is confirmed. Rejects
-    /// any other starting state with `InvalidState` (201).
+    /// Mark an `Active` or `Expired` policy as `Triggered` (FR-POL-1). Guardian
+    /// only; the trigger-engine drives this once an index breach is confirmed.
+    /// `Expired` is accepted because the permissionless `expire` can run as
+    /// the window ends, before a confirmed trigger is marked; otherwise that
+    /// policy could never reach `Paid` (DR-0044). Rejects any other starting
+    /// state with `InvalidState` (201).
     pub fn mark_triggered(env: Env, policy_id: u64) -> Result<(), Error> {
         require_admin(&env)?;
-        transition(&env, policy_id, PolicyState::Active, PolicyState::Triggered)
+        let state = read_policy(&env, policy_id)?.state;
+        let from = if state == PolicyState::Expired {
+            PolicyState::Expired
+        } else {
+            PolicyState::Active
+        };
+        transition(&env, policy_id, from, PolicyState::Triggered)
     }
 
     /// Mark a `Triggered` policy as `Paid` (FR-POL-1). Guardian only; set once
