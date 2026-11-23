@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- `policy.mark_triggered` now also accepts an `Expired` policy (DR-0044). `expire` is permissionless once a policy's window ends, so it could run before the guardian marked a confirmed trigger, after which the certificate could never reach `Paid`. The payout itself was never at risk (it does not depend on the certificate state); this keeps the certificate's record right. Found in the Phase 1 exit review.
 - `trigger-engine` contract spec referenced the `Bps` type alias without defining it, so the Stellar CLI could not parse `IndexParams` ("Missing Entry Bps") and `create_index` was uncallable from the CLI. The four spec exposed positions (`IndexParams.trigger_ratio_bps`, `IndexParams.exhaustion_ratio_bps`, `TriggerStatus::Finalized`, and the `Finalized` event's `severity`) now spell `u32` literally; no logic change (DR-0032).
 - `scripts/testnet/addresses.env`, the per deploy state written by `deploy.sh`, is now git ignored.
 
