@@ -568,6 +568,12 @@ impl OracleAdapter {
 }
 
 /// Persist a value under `key` and extend its TTL in one step.
+///
+/// The extend is load bearing for `PendingPublisher`: testnet's minimum
+/// persistent TTL is 120,960 ledgers, which is exactly the 7 day registry
+/// timelock, so without the extend a pending entry would expire as its eta
+/// arrives and `execute_publisher` could find it evicted. Pinned by
+/// `pending_publisher_outlives_the_timelock_in_ledgers`.
 fn write_persistent<V>(env: &Env, key: &DataKey, value: &V)
 where
     V: soroban_sdk::IntoVal<Env, soroban_sdk::Val>,
