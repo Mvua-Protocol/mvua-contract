@@ -31,7 +31,7 @@ repository = "https://github.com/Mvua-Protocol/mvua-contract"
 authors = ["the Mvua Protocol contributors"]
 
 [workspace.dependencies]
-soroban-sdk = "=23.0.0"
+soroban-sdk = "=23.5.3"
 
 [profile.release]
 opt-level = "z"
