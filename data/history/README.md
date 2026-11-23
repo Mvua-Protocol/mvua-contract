@@ -4,7 +4,9 @@ Daily rainfall history for the candidate pilot regions, committed so that
 every backtest report is reproducible from the repository alone (FR-DATA-1,
 DR-0036). Index simulation (P2.4.2) reads these files. Kenya and Nigeria are
 the first two candidates; the two Tanzanian regions extend coverage to a second
-Swahili speaking country.
+Swahili speaking country. Zambia and Zimbabwe were added after a 27 site
+second series screen in which they were the two sites where ERA5 and CHIRPS
+agree (season totals correlate at 0.79 and 0.83).
 
 | Region | Place | Season | Requested point | Resolved grid cell (lat, lon, elevation m) | Days |
 |---|---|---|---|---|---|
@@ -12,9 +14,11 @@ Swahili speaking country.
 | `NG_KAN` | Kano, Nigeria | Jun to Sep | 12.0480, 8.5250 | 12.0562, 8.4906, 469 | 12,419 |
 | `TZ_DOD` | Dodoma, Tanzania (central plateau) | Dec to Apr | -6.1630, 35.7516 | -6.1511, 35.7143, 1114 | 12,419 |
 | `TZ_MBE` | Mbeya, Tanzania (southern highlands) | Nov to Apr | -8.9094, 33.4608 | -8.8928, 33.4197, 1708 | 12,419 |
+| `ZM_CHO` | Choma, Zambia (Southern Province) | Nov to Mar | -16.8100, 26.9800 | -16.8366, 26.9569, 1316 | 12,419 |
+| `ZW_MAS` | Masvingo, Zimbabwe | Nov to Mar | -20.0700, 30.8300 | -20.0703, 30.8108, 1085 | 12,419 |
 
 Coverage: 1991-01-01 to 2024-12-31 (34 years), one row per UTC day, no gaps.
-A season that crosses New Year (Tanzania) is labelled by its start year, so the
+A season that crosses New Year (Tanzania, Zambia, Zimbabwe) is labelled by its start year, so the
 last complete one starts in 2023 (33 seasons).
 Format: `date,rain_mm` (`rain_mm` is the daily precipitation sum in millimetres).
 

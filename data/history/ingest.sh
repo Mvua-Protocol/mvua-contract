@@ -21,6 +21,8 @@ REGIONS=(
   "NG_KAN 12.0480 8.5250"    # Kano, Nigeria: single Jun to Sep season, Sudan savanna grains
   "TZ_DOD -6.1630 35.7516"   # Dodoma, Tanzania: single Dec to Apr season, drought prone central plateau
   "TZ_MBE -8.9094 33.4608"   # Mbeya, Tanzania: single Nov to Apr season, southern highlands maize belt
+  "ZM_CHO -16.8100 26.9800"  # Choma, Zambia: single Nov to Mar season, Southern Province maize
+  "ZW_MAS -20.0700 30.8300"  # Masvingo, Zimbabwe: single Nov to Mar season, drought prone maize and small grains
 )
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
