@@ -482,6 +482,87 @@ fn collect_premium_respects_fee_caps() {
     let net3 = client.collect_premium(&pool_id, &season_id, &payer, &100);
     assert_eq!(net3, 100);
     assert_eq!(client.treasury(&pool_id).protocol_fees, 15);
+    assert_eq!(client.season(&pool_id, &season_id).protocol_fees, 15);
+}
+
+#[test]
+fn fee_caps_reset_each_season() {
+    // Cap 15 per season (DR-0043): a full first season must not stop the
+    // second from paying its fees, as a lifetime cap would.
+    let (env, contract_id, _token, pool_id, payer) = setup_pool_with_fees(1_000, 500, 15, 8);
+    let client = RiskPoolClient::new(&env, &contract_id);
+    let first = client.open_season(&pool_id);
+    client.activate_season(&pool_id, &first);
+    client.collect_premium(&pool_id, &first, &payer, &1_000);
+    assert_eq!(client.season(&pool_id, &first).protocol_fees, 15);
+    assert_eq!(client.season(&pool_id, &first).publisher_fees, 8);
+
+    let second = client.open_season(&pool_id);
+    client.activate_season(&pool_id, &second);
+    // 100 premium: protocol 10 and publisher 5, both within the fresh caps.
+    let net = client.collect_premium(&pool_id, &second, &payer, &100);
+    assert_eq!(net, 85);
+    let season = client.season(&pool_id, &second);
+    assert_eq!((season.protocol_fees, season.publisher_fees), (10, 5));
+    // The treasury holds both seasons' fees.
+    let treasury = client.treasury(&pool_id);
+    assert_eq!((treasury.protocol_fees, treasury.publisher_fees), (25, 13));
+}
+
+#[test]
+fn withdraw_fees_pays_out_without_touching_reserves() {
+    let (env, contract_id, token, pool_id, payer) = setup_pool_with_fees(100, 50, 0, 0);
+    let client = RiskPoolClient::new(&env, &contract_id);
+    let token_client = token::TokenClient::new(&env, &token);
+    let season_id = client.open_season(&pool_id);
+    client.activate_season(&pool_id, &season_id);
+    client.collect_premium(&pool_id, &season_id, &payer, &1_000); // fees 10 and 5
+
+    let publishers = random_address(&env);
+    client.withdraw_fees(&pool_id, &FeeKind::Publisher, &publishers, &5);
+    assert_eq!(token_client.balance(&publishers), 5);
+    let operator = random_address(&env);
+    client.withdraw_fees(&pool_id, &FeeKind::Protocol, &operator, &4);
+    assert_eq!(token_client.balance(&operator), 4);
+
+    let treasury = client.treasury(&pool_id);
+    assert_eq!((treasury.protocol_fees, treasury.publisher_fees), (6, 0));
+    assert_eq!(client.solvency(&pool_id).reserves, 985);
+    assert_eq!(token_client.balance(&contract_id), 991);
+}
+
+#[test]
+fn withdraw_fees_rejects_bad_amounts() {
+    let (env, contract_id, _token, pool_id, payer) = setup_pool_with_fees(100, 50, 0, 0);
+    let client = RiskPoolClient::new(&env, &contract_id);
+    let season_id = client.open_season(&pool_id);
+    client.activate_season(&pool_id, &season_id);
+    client.collect_premium(&pool_id, &season_id, &payer, &1_000); // publisher fees 5
+    let to = random_address(&env);
+    assert_eq!(
+        client.try_withdraw_fees(&pool_id, &FeeKind::Publisher, &to, &6),
+        Err(Ok(Error::InsufficientFees))
+    );
+    assert_eq!(
+        client.try_withdraw_fees(&pool_id, &FeeKind::Publisher, &to, &0),
+        Err(Ok(Error::InvalidAmount))
+    );
+    assert_eq!(
+        client.try_withdraw_fees(&999, &FeeKind::Publisher, &to, &1),
+        Err(Ok(Error::PoolNotFound))
+    );
+}
+
+#[test]
+#[should_panic]
+fn withdraw_fees_requires_the_guardian() {
+    let (env, contract_id, _token, pool_id, payer) = setup_pool_with_fees(100, 50, 0, 0);
+    let client = RiskPoolClient::new(&env, &contract_id);
+    let season_id = client.open_season(&pool_id);
+    client.activate_season(&pool_id, &season_id);
+    client.collect_premium(&pool_id, &season_id, &payer, &1_000);
+    env.mock_auths(&[]);
+    client.withdraw_fees(&pool_id, &FeeKind::Publisher, &random_address(&env), &5);
 }
 
 #[test]
