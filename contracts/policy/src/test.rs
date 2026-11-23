@@ -244,6 +244,28 @@ fn expire_requires_the_window_to_have_ended() {
 }
 
 #[test]
+fn a_policy_expired_before_its_trigger_can_still_be_paid() {
+    // The race from the Phase 1 exit review (DR-0044): anyone expires the
+    // policy as the window ends, then the guardian marks the confirmed trigger.
+    let (env, _rp_id, pol_id, _token, pool_id, season_id, buyer) = setup();
+    let pol = PolicyClient::new(&env, &pol_id);
+    let policy_id = mint_policy(&env, &pol_id, &buyer, pool_id, season_id);
+    advance_time(&env, WINDOW_END);
+    pol.expire(&policy_id);
+
+    pol.mark_triggered(&policy_id);
+    assert_eq!(pol.policy(&policy_id).state, PolicyState::Triggered);
+    pol.mark_paid(&policy_id);
+    assert_eq!(pol.policy(&policy_id).state, PolicyState::Paid);
+    // Expire cannot undo it, and a paid policy cannot be triggered again.
+    assert_eq!(pol.try_expire(&policy_id), Err(Ok(Error::InvalidState)));
+    assert_eq!(
+        pol.try_mark_triggered(&policy_id),
+        Err(Ok(Error::InvalidState))
+    );
+}
+
+#[test]
 fn cancel_refunds_net_and_marks_cancelled() {
     let (env, rp_id, pol_id, token, pool_id, season_id, buyer) = setup();
     let pol = PolicyClient::new(&env, &pol_id);

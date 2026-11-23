@@ -150,7 +150,7 @@ Key naming: a `#[contracttype]` enum named `DataKey` per contract, variants in `
 | `Admin` | guardian config reference | Instance | |
 | `RiskPool` | risk-pool contract address | Instance | The pool policies quote and purchase against; set at init |
 | `PolicyCounter` | u64 | Instance | Monotonic policy id source |
-| `Policy(policy_id)` | owner, pool_id, season_id, region, coverage, index_ref, window_start, window_end, severity_curve, premium_paid, net_reserved, state | Persistent | State: Active, Triggered, Paid, Expired, Cancelled. `premium_paid` is gross; `net_reserved` (gross minus fees) is what a cancellation refunds |
+| `Policy(policy_id)` | owner, pool_id, season_id, region, coverage, index_ref, window_start, window_end, severity_curve, premium_paid, net_reserved, state | Persistent | State: Active, Triggered, Paid, Expired, Cancelled; `Expired -> Triggered` is allowed for the guardian, since anyone may expire a policy as its window ends (DR-0044). `premium_paid` is gross; `net_reserved` (gross minus fees) is what a cancellation refunds |
 | `MetaPointer(policy_id)` | opaque off chain reference (`BytesN<32>`) | Persistent | Content hash or URI digest; no PII on chain (NFR-PRIV-1) |
 | `Transferable(pool_id)` | bool | Persistent | Default false (FR-POL-6) |
 
